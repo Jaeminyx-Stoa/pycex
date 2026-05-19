@@ -1,0 +1,48 @@
+site_name: pycex
+site_description: Unified Python wrapper for cryptocurrency exchanges (Binance, Bybit, OKX)
+site_url: https://jaeminyx-stoa.github.io/pycex/
+repo_url: https://github.com/Jaeminyx-Stoa/pycex
+repo_name: Jaeminyx-Stoa/pycex
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.expand
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - API Reference:
+      - Exchanges: api/exchanges.md
+      - Models: api/models.md
+  - MCP Server: mcp.md
+  - CLI: cli.md
+  - Changelog: changelog.md

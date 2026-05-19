@@ -1,0 +1,14 @@
+{
+  "$schema": "https://context7.com/schema/context7.json",
+  "projectTitle": "pycex",
+  "description": "Unified Python wrapper for cryptocurrency exchanges (Binance, Bybit, OKX) — typed, async-first, with MCP server",
+  "folders": ["src", "docs", "examples"],
+  "excludeFolders": [".git", "__pycache__", "dist", "build", ".mypy_cache", ".pytest_cache"],
+  "excludeFiles": [],
+  "rules": [
+    "Use the same unified API interface across all exchanges (BaseExchange)",
+    "Use context manager (with/async with) for automatic cleanup",
+    "All API responses include a .raw field for accessing original exchange data",
+    "Rate limiting is handled automatically by the HTTPClient"
+  ]
+}
