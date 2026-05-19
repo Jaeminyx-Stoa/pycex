@@ -22,6 +22,13 @@ SELL = "sell"
 LIMIT = "limit"
 MARKET = "market"
 
+# ── Broker / Referral IDs ──
+# These are sent with every API request for affiliate attribution.
+# Apply at each exchange's broker/partner program to get your own IDs.
+BINANCE_BROKER_ID = ""
+BYBIT_REFERRAL_CODE = ""
+OKX_BROKER_ID = ""
+
 # ── Timeframes ──
 TIMEFRAME_1m = "1m"
 TIMEFRAME_5m = "5m"

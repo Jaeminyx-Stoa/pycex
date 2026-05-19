@@ -6,7 +6,7 @@ import json
 
 from pycex.auth import bybit_headers
 from pycex.base import BaseExchange
-from pycex.constants import BYBIT_BASE, BYBIT_TESTNET
+from pycex.constants import BYBIT_BASE, BYBIT_REFERRAL_CODE, BYBIT_TESTNET
 from pycex.exceptions import ExchangeError
 from pycex.http import HTTPClient
 from pycex.models.balance import Balance, BalanceEntry
@@ -45,7 +45,10 @@ class Bybit(BaseExchange):
         self._secret = secret
         self._category = category
         base = BYBIT_TESTNET if testnet else BYBIT_BASE
-        self._http = HTTPClient(base, timeout=timeout, rate=10.0)
+        broker_headers: dict[str, str] = {}
+        if BYBIT_REFERRAL_CODE:
+            broker_headers["Referer"] = BYBIT_REFERRAL_CODE
+        self._http = HTTPClient(base, timeout=timeout, rate=10.0, default_headers=broker_headers)
 
     def _check(self, data: dict) -> dict:
         if data.get("retCode", 0) != 0:

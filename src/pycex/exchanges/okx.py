@@ -6,7 +6,7 @@ import json
 
 from pycex.auth import okx_headers
 from pycex.base import BaseExchange
-from pycex.constants import OKX_BASE
+from pycex.constants import OKX_BASE, OKX_BROKER_ID
 from pycex.exceptions import ExchangeError
 from pycex.http import HTTPClient
 from pycex.models.balance import Balance, BalanceEntry
@@ -43,7 +43,10 @@ class OKX(BaseExchange):
         self._secret = secret
         self._passphrase = passphrase
         self._demo = demo
-        self._http = HTTPClient(OKX_BASE, timeout=timeout, rate=10.0)
+        broker_headers: dict[str, str] = {}
+        if OKX_BROKER_ID:
+            broker_headers["broker-id"] = OKX_BROKER_ID
+        self._http = HTTPClient(OKX_BASE, timeout=timeout, rate=10.0, default_headers=broker_headers)
 
     def _check(self, data: dict) -> list:
         code = data.get("code", "0")
@@ -101,6 +104,8 @@ class OKX(BaseExchange):
             "ordType": "limit" if order_type.lower() == "limit" else "market",
             "sz": str(amount),
         }
+        if OKX_BROKER_ID:
+            body["tag"] = OKX_BROKER_ID
         if price is not None:
             body["px"] = str(price)
         body_str = json.dumps(body)
@@ -179,6 +184,8 @@ class OKX(BaseExchange):
             "ordType": "limit" if order_type.lower() == "limit" else "market",
             "sz": str(amount),
         }
+        if OKX_BROKER_ID:
+            body["tag"] = OKX_BROKER_ID
         if price is not None:
             body["px"] = str(price)
         body_str = json.dumps(body)

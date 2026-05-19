@@ -54,10 +54,13 @@ class RateLimiter:
 class HTTPClient:
     """Async HTTP client for exchange API calls."""
 
-    def __init__(self, base_url: str, *, timeout: float = 30.0, rate: float = 10.0) -> None:
+    def __init__(
+        self, base_url: str, *, timeout: float = 30.0, rate: float = 10.0, default_headers: dict | None = None
+    ) -> None:
         self._base_url = base_url.rstrip("/")
-        self._client = httpx.AsyncClient(base_url=self._base_url, timeout=timeout)
-        self._sync_client = httpx.Client(base_url=self._base_url, timeout=timeout)
+        self._default_headers = default_headers or {}
+        self._client = httpx.AsyncClient(base_url=self._base_url, timeout=timeout, headers=self._default_headers)
+        self._sync_client = httpx.Client(base_url=self._base_url, timeout=timeout, headers=self._default_headers)
         self._limiter = RateLimiter(rate)
 
     async def get(self, path: str, *, params: dict | None = None, headers: dict | None = None) -> dict[str, Any]:

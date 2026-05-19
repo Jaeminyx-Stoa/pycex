@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pycex.auth import binance_headers, binance_sign
 from pycex.base import BaseExchange
-from pycex.constants import BINANCE_BASE, BINANCE_TESTNET
+from pycex.constants import BINANCE_BASE, BINANCE_BROKER_ID, BINANCE_TESTNET
 from pycex.http import HTTPClient
 from pycex.models.balance import Balance, BalanceEntry
 from pycex.models.candle import Candle
@@ -38,7 +38,10 @@ class Binance(BaseExchange):
         self._api_key = api_key
         self._secret = secret
         base = BINANCE_TESTNET if testnet else BINANCE_BASE
-        self._http = HTTPClient(base, timeout=timeout, rate=10.0)
+        broker_headers: dict[str, str] = {}
+        if BINANCE_BROKER_ID:
+            broker_headers["X-MBX-BROKER-ID"] = BINANCE_BROKER_ID
+        self._http = HTTPClient(base, timeout=timeout, rate=10.0, default_headers=broker_headers)
 
     def _auth_headers(self) -> dict[str, str]:
         return binance_headers(self._api_key)
