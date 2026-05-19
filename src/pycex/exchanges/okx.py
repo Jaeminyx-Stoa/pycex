@@ -162,6 +162,12 @@ class OKX(BaseExchange):
         result = self._check(data)
         return _parse_ticker(result[0])
 
+    def fetch_candles_sync(self, symbol: str, timeframe: str = "1h", *, limit: int = 100) -> list[Candle]:
+        params = {"instId": symbol, "bar": _TIMEFRAME_MAP.get(timeframe, timeframe), "limit": str(limit)}
+        data = self._http.sync_get("/api/v5/market/candles", params=params)
+        result = self._check(data)
+        return [_parse_candle(k) for k in result]
+
     def fetch_order_book_sync(self, symbol: str, *, limit: int = 20) -> OrderBook:
         data = self._http.sync_get("/api/v5/market/books", params={"instId": symbol, "sz": limit})
         result = self._check(data)

@@ -100,9 +100,7 @@ class Bybit(BaseExchange):
     async def fetch_balance(self) -> Balance:
         query = "accountType=UNIFIED"
         headers = self._auth_get_headers(query)
-        data = await self._http.get(
-            "/v5/account/wallet-balance", params={"accountType": "UNIFIED"}, headers=headers
-        )
+        data = await self._http.get("/v5/account/wallet-balance", params={"accountType": "UNIFIED"}, headers=headers)
         result = self._check(data)
         return _parse_balance(result, data)
 
@@ -165,6 +163,17 @@ class Bybit(BaseExchange):
         result = self._check(data)
         return _parse_ticker(result["list"][0])
 
+    def fetch_candles_sync(self, symbol: str, timeframe: str = "1h", *, limit: int = 100) -> list[Candle]:
+        params = {
+            "category": self._category,
+            "symbol": symbol,
+            "interval": _TIMEFRAME_MAP.get(timeframe, timeframe),
+            "limit": limit,
+        }
+        data = self._http.sync_get("/v5/market/kline", params=params)
+        result = self._check(data)
+        return [_parse_candle(k) for k in result.get("list", [])]
+
     def fetch_order_book_sync(self, symbol: str, *, limit: int = 20) -> OrderBook:
         params = {"category": self._category, "symbol": symbol, "limit": limit}
         data = self._http.sync_get("/v5/market/orderbook", params=params)
@@ -174,9 +183,7 @@ class Bybit(BaseExchange):
     def fetch_balance_sync(self) -> Balance:
         query = "accountType=UNIFIED"
         headers = self._auth_get_headers(query)
-        data = self._http.sync_get(
-            "/v5/account/wallet-balance", params={"accountType": "UNIFIED"}, headers=headers
-        )
+        data = self._http.sync_get("/v5/account/wallet-balance", params={"accountType": "UNIFIED"}, headers=headers)
         result = self._check(data)
         return _parse_balance(result, data)
 

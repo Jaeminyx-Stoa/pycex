@@ -95,9 +95,7 @@ class Binance(BaseExchange):
 
     async def cancel_order(self, order_id: str, symbol: str) -> Order:
         params = self._signed_params({"symbol": symbol, "orderId": order_id})
-        resp = await self._http._client.delete(
-            "/api/v3/order", params=params, headers=self._auth_headers()
-        )
+        resp = await self._http._client.delete("/api/v3/order", params=params, headers=self._auth_headers())
         return _parse_order(resp.json())
 
     async def fetch_order(self, order_id: str, symbol: str) -> Order:
@@ -118,6 +116,11 @@ class Binance(BaseExchange):
     def fetch_ticker_sync(self, symbol: str) -> Ticker:
         data = self._http.sync_get("/api/v3/ticker/24hr", params={"symbol": symbol})
         return _parse_ticker(data)
+
+    def fetch_candles_sync(self, symbol: str, timeframe: str = "1h", *, limit: int = 100) -> list[Candle]:
+        params = {"symbol": symbol, "interval": _TIMEFRAME_MAP.get(timeframe, timeframe), "limit": limit}
+        data = self._http.sync_get("/api/v3/klines", params=params)
+        return [_parse_candle(k) for k in data]
 
     def fetch_order_book_sync(self, symbol: str, *, limit: int = 20) -> OrderBook:
         data = self._http.sync_get("/api/v3/depth", params={"symbol": symbol, "limit": limit})
