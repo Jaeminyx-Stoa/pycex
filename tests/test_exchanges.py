@@ -1,7 +1,7 @@
 """Tests for exchange initialization and configuration."""
 
-from pycex import OKX, Binance, Bybit
-from pycex.constants import BINANCE_BASE, BINANCE_TESTNET, BYBIT_BASE, BYBIT_TESTNET, OKX_BASE
+from pycex import OKX, Binance, Bitget, Bybit
+from pycex.constants import BINANCE_BASE, BINANCE_TESTNET, BITGET_BASE, BYBIT_BASE, BYBIT_TESTNET, OKX_BASE
 
 
 class TestBinanceInit:
@@ -43,4 +43,16 @@ class TestOKXInit:
 
     def test_demo(self) -> None:
         ex = OKX(api_key="k", secret="s", passphrase="p", demo=True)
+        assert ex._demo
+
+
+class TestBitgetInit:
+    def test_default(self) -> None:
+        ex = Bitget(api_key="k", secret="s", passphrase="p")
+        assert ex.name == "bitget"
+        assert ex._http._base_url == BITGET_BASE
+        assert not ex._demo
+
+    def test_demo(self) -> None:
+        ex = Bitget(api_key="k", secret="s", passphrase="p", demo=True)
         assert ex._demo
