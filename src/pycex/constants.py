@@ -14,6 +14,9 @@ BYBIT_TESTNET = "https://api-testnet.bybit.com"
 OKX_BASE = "https://www.okx.com"
 OKX_DEMO = "https://www.okx.com"  # same host, demo flag in header
 
+# ── Bitget ──
+BITGET_BASE = "https://api.bitget.com"  # same host for live and demo, demo via paptrading header
+
 # ── Sides ──
 BUY = "buy"
 SELL = "sell"
@@ -28,6 +31,7 @@ MARKET = "market"
 BINANCE_BROKER_ID = ""
 BYBIT_REFERRAL_CODE = ""
 OKX_BROKER_ID = ""
+BITGET_BROKER_ID = ""  # X-CHANNEL-API-CODE for API broker rebate
 
 # ── Timeframes ──
 TIMEFRAME_1m = "1m"

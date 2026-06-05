@@ -75,3 +75,38 @@ def _okx_timestamp() -> str:
     t = time.time()
     ms = int(t * 1000) % 1000
     return time.strftime("%Y-%m-%dT%H:%M:%S.", time.gmtime(t)) + f"{ms:03d}Z"
+
+
+# ── Bitget ──
+
+
+def bitget_headers(
+    api_key: str,
+    secret: str,
+    passphrase: str,
+    method: str,
+    request_path: str,
+    body: str = "",
+    *,
+    demo: bool = False,
+) -> dict[str, str]:
+    """Build Bitget V2 authentication headers.
+
+    Signature = BASE64(HMAC-SHA256(secret, timestamp + METHOD + requestPath + body)).
+    ``request_path`` must include the query string for GET requests. ``demo=True``
+    adds the ``paptrading: 1`` header to route to Bitget demo (simulated) trading.
+    """
+    ts = str(timestamp_ms())
+    prehash = ts + method.upper() + request_path + body
+    sign = base64.b64encode(hmac.new(secret.encode(), prehash.encode(), hashlib.sha256).digest()).decode()
+    headers = {
+        "ACCESS-KEY": api_key,
+        "ACCESS-SIGN": sign,
+        "ACCESS-TIMESTAMP": ts,
+        "ACCESS-PASSPHRASE": passphrase,
+        "locale": "en-US",
+        "Content-Type": "application/json",
+    }
+    if demo:
+        headers["paptrading"] = "1"
+    return headers

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Bitget** spot exchange (V2 API) — `Bitget(api_key, secret, passphrase, *, demo=False)`.
+  Implements the full unified interface (tickers, order book, candles, trades,
+  balance, place/cancel/fetch orders; sync + async). `demo=True` routes private
+  calls to Bitget demo (simulated) trading via the `paptrading: 1` header.
+
 ## [0.1.0] - 2025-05-19
 
 ### Added
