@@ -23,7 +23,11 @@ class Balance(BaseModel):
     """Unified account balance."""
 
     assets: list[BalanceEntry]
-    raw: dict[str, Any] = {}  # noqa: RUF012
+    #: The exchange's balance response verbatim. A list when the endpoint returns a
+    #: bare array (Binance's `/fapi/v2/balance`, Upbit/Bithumb's `/v1/accounts`) —
+    #: wrapping those in a fabricated envelope would make `raw` claim a shape the
+    #: endpoint never sent.
+    raw: dict[str, Any] | list[Any] = {}  # noqa: RUF012
 
     def get(self, asset: str) -> BalanceEntry | None:
         for entry in self.assets:

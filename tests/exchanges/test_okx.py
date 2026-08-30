@@ -25,6 +25,7 @@ from pytest_httpx import HTTPXMock
 
 from pycex.exceptions import (
     AuthenticationError,
+    ExchangeError,
     InsufficientBalanceError,
     NotSupportedError,
     OrderNotFoundError,
@@ -635,4 +636,16 @@ async def test_map_error_on_http_400_body(httpx_mock: HTTPXMock) -> None:
     ex = OKX(api_key="k", secret="s", passphrase="p")
     with pytest.raises(AuthenticationError):
         await ex.fetch_balance()
+    await ex.close()
+
+
+@pytest.mark.parametrize("method,path", [("fetch_ticker", "ticker"), ("fetch_order_book", "books")])
+async def test_empty_data_raises_exchange_error(httpx_mock: HTTPXMock, method: str, path: str) -> None:
+    """OKX answers an unknown//delisted instId with code 0 and an empty `data`
+    array; indexing it blew up with IndexError (order book quietly returned an
+    empty book) instead of a PyCexError."""
+    httpx_mock.add_response(json={"code": "0", "msg": "", "data": []})
+    ex = OKX()
+    with pytest.raises(ExchangeError):
+        await getattr(ex, method)("BTC/USDT")
     await ex.close()

@@ -21,7 +21,7 @@ from pytest_httpx import HTTPXMock
 
 from pycex.constants import BINANCE_FAPI, BINANCE_FAPI_TESTNET
 from pycex.exceptions import NotSupportedError
-from pycex.exchanges.binance import Binance, _parse_funding, _parse_market, _parse_trade
+from pycex.exchanges.binance import Binance, _parse_balance_linear, _parse_funding, _parse_market, _parse_trade
 from tests.conftest import load_fixture
 
 SECRET = "s"
@@ -395,3 +395,11 @@ def test_parse_public_trade_side_is_the_taker_side() -> None:
     taker_buy = _parse_trade("BTC/USDT", {"id": 2, "price": "1", "qty": "2", "time": 3, "isBuyerMaker": False})
     assert maker_buy.side == "sell"
     assert taker_buy.side == "buy"
+
+
+def test_parse_balance_linear_keeps_the_actual_response_as_raw() -> None:
+    """GET /fapi/v2/balance returns a bare list; `raw` used to wrap it in a
+    `{"balances": [...]}` envelope that the endpoint never sent — the exact shape
+    spot returns, so `raw` lied about which endpoint answered."""
+    data = [{"asset": "USDT", "balance": "10", "availableBalance": "7"}]
+    assert _parse_balance_linear(data).raw == data

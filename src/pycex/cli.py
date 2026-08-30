@@ -139,7 +139,7 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command")
 
     p_ticker = sub.add_parser("ticker", help="Get ticker")
-    p_ticker.add_argument("symbol", help="Trading pair (e.g., BTCUSDT)")
+    p_ticker.add_argument("symbol", help="Canonical pair, BASE/QUOTE or BASE/QUOTE:SETTLE (e.g. BTC/USDT)")
     p_ticker.set_defaults(func=cmd_ticker)
 
     p_ob = sub.add_parser("orderbook", help="Get order book")

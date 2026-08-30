@@ -109,3 +109,14 @@ def test_funding_rate_interval_default() -> None:
 
 def test_not_supported_is_pycex_error() -> None:
     assert issubclass(NotSupportedError, PyCexError)
+
+
+def test_every_model_is_exported_from_the_package_root() -> None:
+    """`from pycex import Candle` was an ImportError: only 4 of the 12 models were
+    re-exported, so callers had to reach into `pycex.models.*` for the rest."""
+    import pycex
+    import pycex.models
+
+    for name in pycex.models.__all__:
+        assert name in pycex.__all__, f"{name} missing from pycex.__all__"
+        assert getattr(pycex, name) is getattr(pycex.models, name)

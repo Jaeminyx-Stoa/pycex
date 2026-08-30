@@ -99,7 +99,7 @@ def get_ticker(symbol: str) -> str:
     """암호화폐 현재가를 조회합니다.
 
     Args:
-        symbol: 거래쌍 (예: "BTCUSDT", "BTC-USDT")
+        symbol: 정규 거래쌍 — 현물 "BASE/QUOTE", 무기한 "BASE/QUOTE:SETTLE" (예: "BTC/USDT", "BTC/USDT:USDT")
     """
     ex = _get_exchange()
     try:
@@ -368,7 +368,7 @@ def aggregate_balance() -> str:
 
 
 @mcp.prompt()
-def market_analysis(symbol: str = "BTCUSDT") -> str:
+def market_analysis(symbol: str = "BTC/USDT") -> str:
     """시장 분석 프롬프트 — AI가 기술 분석과 가격 비교를 수행합니다."""
     return (
         f"{symbol}에 대해 종합적인 시장 분석을 수행해주세요.\n\n"

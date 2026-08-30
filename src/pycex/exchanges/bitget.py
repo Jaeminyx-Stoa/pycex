@@ -369,7 +369,10 @@ class Bitget(BaseExchange):
         if until is not None:
             params["endTime"] = until
         data = await self._http.get(self._p("candles"), params=params)
-        return [_parse_candle(k) for k in self._check(data)]
+        # Sorted for the same reason the mix branch above is: ascending is the
+        # library-wide contract, and it must not depend on which market type
+        # (or which of Bitget's two candle endpoints) served the page.
+        return sorted((_parse_candle(k) for k in self._check(data)), key=lambda c: c.timestamp)
 
     async def fetch_trades(self, symbol: str, *, limit: int = 100) -> list[Trade]:
         native = self.to_native(symbol)

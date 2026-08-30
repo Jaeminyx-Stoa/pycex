@@ -671,3 +671,18 @@ async def test_map_error_on_http_400_body(httpx_mock: HTTPXMock) -> None:
     with pytest.raises(AuthenticationError):
         await ex.fetch_balance()
     await ex.close()
+
+
+async def test_fetch_candles_page_spot_sorts_ascending(httpx_mock: HTTPXMock) -> None:
+    """The mix branch sorted its page; the spot branch did not, so the ascending
+    contract held or not depending on which market type the caller picked."""
+    rows = [
+        ["1788048000000", "3", "3", "3", "3", "1", "1"],
+        ["1787961600000", "2", "2", "2", "2", "1", "1"],
+        ["1787875200000", "1", "1", "1", "1", "1", "1"],
+    ]
+    httpx_mock.add_response(json={"code": "00000", "msg": "success", "data": rows})
+    ex = Bitget()
+    candles = await ex._fetch_candles_page("BTCUSDT", "1d", since=None, until=None, limit=3)
+    assert [c.timestamp for c in candles] == [1787875200000, 1787961600000, 1788048000000]
+    await ex.close()

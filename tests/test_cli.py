@@ -8,15 +8,19 @@ construction path).
 from __future__ import annotations
 
 import argparse
+import inspect
+import sys
 import warnings
 from typing import cast
 
 import pytest
 
+from pycex import cli
 from pycex.base import BaseExchange
-from pycex.cli import _make_exchange
+from pycex.cli import _make_exchange, main
 from pycex.exchanges import OKX, Binance, Bitget, Bithumb, Bybit, Korbit, Upbit
 from pycex.factory import EXCHANGES, create_exchange
+from pycex.mcp import server as mcp_server
 
 
 def _namespace(**kw: object) -> argparse.Namespace:
@@ -180,3 +184,22 @@ def test_cli_default_exchange_is_binance_when_env_unset(monkeypatch: pytest.Monk
     args = _namespace(exchange=None, api_key="k", secret="s")
     ex = _make_exchange(args)
     assert isinstance(ex, Binance)
+
+
+def test_symbol_help_advertises_canonical_notation(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The CLI takes canonical symbols (`to_native` converts) — advertising the
+    exchange-native `BTCUSDT` handed users a string every adapter now rejects."""
+    monkeypatch.setattr(sys, "argv", ["pycex", "ticker", "--help"])
+    with pytest.raises(SystemExit):
+        main()
+    out = capsys.readouterr().out
+    assert "BTC/USDT" in out
+    assert "BTCUSDT" not in out
+
+
+def test_user_facing_help_has_no_native_symbol_examples() -> None:
+    for module in (cli, mcp_server):
+        assert "BTCUSDT" not in inspect.getsource(module), f"{module.__name__} still advertises a native symbol"
+    assert inspect.signature(mcp_server.market_analysis).parameters["symbol"].default == "BTC/USDT"

@@ -424,7 +424,7 @@ def _parse_balance_linear(data: list[dict[str, Any]]) -> Balance:
         available = float(b.get("availableBalance", 0) or 0)
         if total != 0 or available != 0:
             entries.append(BalanceEntry(asset=str(b.get("asset", "")), free=available, locked=total - available))
-    return Balance(assets=entries, raw={"balances": data})
+    return Balance(assets=entries, raw=data)
 
 
 def _none_if_zero(v: Any) -> float | None:

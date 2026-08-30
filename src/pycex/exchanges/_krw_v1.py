@@ -311,7 +311,7 @@ def _parse_balance(result: list[Any]) -> Balance:
         locked = float(c.get("locked", 0) or 0)
         if free > 0 or locked > 0:
             entries.append(BalanceEntry(asset=c.get("currency", ""), free=free, locked=locked))
-    return Balance(assets=entries, raw={"accounts": result})
+    return Balance(assets=entries, raw=result)  # /v1/accounts returns a bare list
 
 
 def _parse_order(symbol: str, d: dict[str, Any]) -> Order:

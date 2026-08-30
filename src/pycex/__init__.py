@@ -30,7 +30,20 @@ from pycex.exceptions import (
 )
 from pycex.exchanges import OKX, Binance, Bitget, Bithumb, Bybit, Korbit, Upbit
 from pycex.factory import create_exchange
-from pycex.models import FundingRate, Market, MyTrade, Position
+from pycex.models import (
+    Balance,
+    BalanceEntry,
+    Candle,
+    FundingRate,
+    Market,
+    MyTrade,
+    Order,
+    OrderBook,
+    OrderBookEntry,
+    Position,
+    Ticker,
+    Trade,
+)
 from pycex.symbols import parse_symbol
 
 __version__ = "0.2.0"
@@ -66,10 +79,18 @@ __all__ = [
     "NetworkError",
     "SymbolNotFoundError",
     "NotSupportedError",
+    "Balance",
+    "BalanceEntry",
+    "Candle",
     "FundingRate",
     "Market",
     "MyTrade",
+    "Order",
+    "OrderBook",
+    "OrderBookEntry",
     "Position",
+    "Ticker",
+    "Trade",
     "create_exchange",
     "parse_symbol",
 ]

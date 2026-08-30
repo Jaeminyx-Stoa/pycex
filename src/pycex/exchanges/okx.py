@@ -194,13 +194,17 @@ class OKX(BaseExchange):
         native = self.to_native(symbol)
         data = await self._http.get("/api/v5/market/ticker", params={"instId": native})
         result = self._check(data)
+        if not result:
+            raise ExchangeError(f"okx returned no ticker for {symbol}", code=native, exchange="okx")
         return _parse_ticker(symbol, result[0])
 
     async def fetch_order_book(self, symbol: str, *, limit: int = 20) -> OrderBook:
         native = self.to_native(symbol)
         data = await self._http.get("/api/v5/market/books", params={"instId": native, "sz": limit})
         result = self._check(data)
-        return _parse_order_book(symbol, result[0] if result else {})
+        if not result:
+            raise ExchangeError(f"okx returned no order book for {symbol}", code=native, exchange="okx")
+        return _parse_order_book(symbol, result[0])
 
     async def _fetch_candles_page(
         self, native: str, timeframe: str, *, since: int | None, until: int | None, limit: int
