@@ -24,20 +24,68 @@ TARGETS = [
     ("bithumb", "candles_1d", "https://api.bithumb.com/v1/candles/days", {"market": "KRW-BTC", "count": 3}, 3),
     ("bithumb", "ticker", "https://api.bithumb.com/v1/ticker", {"markets": "KRW-BTC"}, 3),
     ("korbit", "markets", "https://api.korbit.co.kr/v2/currencyPairs", {}, 3),
-    ("korbit", "candles_1d", "https://api.korbit.co.kr/v2/candles", {"symbol": "btc_krw", "interval": "1D", "limit": 3}, 3),
+    (
+        "korbit",
+        "candles_1d",
+        "https://api.korbit.co.kr/v2/candles",
+        {"symbol": "btc_krw", "interval": "1D", "limit": 3},
+        3,
+    ),
     ("korbit", "ticker", "https://api.korbit.co.kr/v2/tickers", {"symbol": "btc_krw"}, 3),
     ("binance", "markets_spot", "https://api.binance.com/api/v3/exchangeInfo", {"symbol": "BTCUSDT"}, 0),
     ("binance", "markets_linear", "https://fapi.binance.com/fapi/v1/exchangeInfo", {}, 0),
-    ("binance", "candles_linear_1d", "https://fapi.binance.com/fapi/v1/klines", {"symbol": "BTCUSDT", "interval": "1d", "limit": 3}, 3),
+    (
+        "binance",
+        "candles_linear_1d",
+        "https://fapi.binance.com/fapi/v1/klines",
+        {"symbol": "BTCUSDT", "interval": "1d", "limit": 3},
+        3,
+    ),
     ("binance", "funding", "https://fapi.binance.com/fapi/v1/premiumIndex", {"symbol": "BTCUSDT"}, 0),
-    ("okx", "markets_spot", "https://www.okx.com/api/v5/public/instruments", {"instType": "SPOT", "instId": "BTC-USDT"}, 0),
-    ("okx", "markets_swap", "https://www.okx.com/api/v5/public/instruments", {"instType": "SWAP", "instId": "BTC-USDT-SWAP"}, 0),
-    ("okx", "candles_swap_1d", "https://www.okx.com/api/v5/market/candles", {"instId": "BTC-USDT-SWAP", "bar": "1D", "limit": 3}, 0),
+    (
+        "okx",
+        "markets_spot",
+        "https://www.okx.com/api/v5/public/instruments",
+        {"instType": "SPOT", "instId": "BTC-USDT"},
+        0,
+    ),
+    (
+        "okx",
+        "markets_swap",
+        "https://www.okx.com/api/v5/public/instruments",
+        {"instType": "SWAP", "instId": "BTC-USDT-SWAP"},
+        0,
+    ),
+    (
+        "okx",
+        "candles_swap_1d",
+        "https://www.okx.com/api/v5/market/candles",
+        {"instId": "BTC-USDT-SWAP", "bar": "1D", "limit": 3},
+        0,
+    ),
     ("okx", "funding", "https://www.okx.com/api/v5/public/funding-rate", {"instId": "BTC-USDT-SWAP"}, 0),
     ("bitget", "markets_spot", "https://api.bitget.com/api/v2/spot/public/symbols", {"symbol": "BTCUSDT"}, 0),
-    ("bitget", "markets_linear", "https://api.bitget.com/api/v2/mix/market/contracts", {"productType": "USDT-FUTURES", "symbol": "BTCUSDT"}, 0),
-    ("bitget", "candles_linear_1d", "https://api.bitget.com/api/v2/mix/market/candles", {"symbol": "BTCUSDT", "productType": "USDT-FUTURES", "granularity": "1D", "limit": 3}, 0),
-    ("bitget", "funding", "https://api.bitget.com/api/v2/mix/market/current-fund-rate", {"symbol": "BTCUSDT", "productType": "USDT-FUTURES"}, 0),
+    (
+        "bitget",
+        "markets_linear",
+        "https://api.bitget.com/api/v2/mix/market/contracts",
+        {"productType": "USDT-FUTURES", "symbol": "BTCUSDT"},
+        0,
+    ),
+    (
+        "bitget",
+        "candles_linear_1d",
+        "https://api.bitget.com/api/v2/mix/market/candles",
+        {"symbol": "BTCUSDT", "productType": "USDT-FUTURES", "granularity": "1D", "limit": 3},
+        0,
+    ),
+    (
+        "bitget",
+        "funding",
+        "https://api.bitget.com/api/v2/mix/market/current-fund-rate",
+        {"symbol": "BTCUSDT", "productType": "USDT-FUTURES"},
+        0,
+    ),
 ]
 
 
@@ -58,7 +106,9 @@ def main() -> None:
             # aren't covered by keep_first_n above — trim them to a fixed symbol set
             # regardless of n so they don't balloon fixture size.
             if isinstance(data, dict) and isinstance(data.get("symbols"), list):
-                data["symbols"] = [s for s in data["symbols"] if isinstance(s, dict) and s.get("symbol") in SYMBOLS_KEEP]
+                data["symbols"] = [
+                    s for s in data["symbols"] if isinstance(s, dict) and s.get("symbol") in SYMBOLS_KEEP
+                ]
             p = OUT / ex / f"{name}.json"
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(json.dumps(data, indent=2, ensure_ascii=False))
