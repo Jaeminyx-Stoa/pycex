@@ -5,54 +5,37 @@ signed with a JWT (HS256): the payload carries the API access key, a random
 nonce, and — when the request has a query (GET/DELETE) or a JSON body that
 Upbit treats as a query (POST) — a SHA-512 hash of the urlencoded params as
 ``query_hash``. See :func:`pycex.auth.upbit_headers`.
+
+The public-market-data surface (symbols, candles, ticker, order book, public
+trades) is shared with :class:`pycex.exchanges.bithumb.Bithumb` via
+:class:`pycex.exchanges._krw_v1.KrwV1Mixin` — see that module's docstring for
+what's shared and why the private/trading methods below are not.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
 
 from pycex.auth import upbit_headers
 from pycex.base import BaseExchange
 from pycex.constants import UPBIT_BASE
-from pycex.exceptions import (
-    AuthenticationError,
-    ExchangeError,
-    InsufficientBalanceError,
-    InvalidOrderError,
-    NotSupportedError,
-    OrderNotFoundError,
-    PyCexError,
-    RateLimitError,
-)
+from pycex.exceptions import InvalidOrderError, NotSupportedError, PyCexError
+from pycex.exchanges._krw_v1 import KrwV1Mixin, _parse_balance, _parse_iso_to_ms, _parse_order, map_krw_error
+from pycex.exchanges._krw_v1 import _parse_candle as _parse_candle
+from pycex.exchanges._krw_v1 import _parse_market as _parse_market
+from pycex.exchanges._krw_v1 import _parse_ticker as _parse_ticker
 from pycex.http import HTTPClient
-from pycex.models.balance import Balance, BalanceEntry
-from pycex.models.candle import Candle
+from pycex.models.balance import Balance
 from pycex.models.market import Market
 from pycex.models.mytrade import MyTrade
 from pycex.models.order import Order
-from pycex.models.orderbook import OrderBook, OrderBookEntry
-from pycex.models.ticker import Ticker
-from pycex.models.trade import Trade
-from pycex.symbols import MarketType, parse_symbol, spot
+from pycex.symbols import MarketType
 
-# Canonical timeframe -> Upbit candle path suffix (`/v1/candles/{suffix}`).
-_TF = {"1m": "minutes/1", "5m": "minutes/5", "15m": "minutes/15", "1h": "minutes/60", "4h": "minutes/240", "1d": "days"}
-_TF_MS = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
+_AUTH_NAMES = frozenset({"invalid_query_payload", "jwt_verification", "expired_access_key", "no_authorization_ip"})
+_RATE_LIMIT_NAMES = frozenset({"too_many_requests"})
 
 
-def _iso_utc(ms: int) -> str:
-    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def _parse_iso_to_ms(s: str) -> int:
-    dt = datetime.fromisoformat(s)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return int(dt.timestamp() * 1000)
-
-
-class Upbit(BaseExchange):
+class Upbit(KrwV1Mixin, BaseExchange):
     """Upbit spot exchange — no sandbox, spot only."""
 
     name = "upbit"
@@ -81,52 +64,6 @@ class Upbit(BaseExchange):
 
     def _headers(self, params: dict[str, Any] | None = None) -> dict[str, str]:
         return upbit_headers(self._api_key, self._secret, params)
-
-    # ── Symbols ──
-
-    def to_native(self, symbol: str) -> str:
-        s = parse_symbol(symbol)
-        return f"{s.quote}-{s.base}"
-
-    def from_native(self, native: str) -> str:
-        quote, base = native.split("-", 1)
-        return spot(base, quote)
-
-    # ── Market Data ──
-
-    async def fetch_ticker(self, symbol: str) -> Ticker:
-        native = self.to_native(symbol)
-        data = await self._http.get("/v1/ticker", params={"markets": native})
-        return _parse_ticker(data[0])
-
-    async def fetch_order_book(self, symbol: str, *, limit: int = 20) -> OrderBook:
-        native = self.to_native(symbol)
-        data = await self._http.get("/v1/orderbook", params={"markets": native})
-        return _parse_order_book(symbol, data[0], limit)
-
-    async def _fetch_candles_page(
-        self, native: str, timeframe: str, *, since: int | None, until: int | None, limit: int
-    ) -> list[Candle]:
-        params: dict[str, Any] = {"market": native, "count": min(limit, 200)}
-        if until is not None:
-            params["to"] = _iso_utc(until + 1)  # `to` is exclusive of the given instant
-        elif since is not None:
-            # Upbit only pages backwards via `to` — anchor the page far enough ahead
-            # of `since` that the base class's forward pagination still makes progress.
-            params["to"] = _iso_utc(since + limit * _TF_MS[timeframe])
-        data = await self._http.get(f"/v1/candles/{_TF[timeframe]}", params=params)
-        return sorted((_parse_candle(c) for c in data), key=lambda c: c.timestamp)
-
-    async def fetch_trades(self, symbol: str, *, limit: int = 100) -> list[Trade]:
-        native = self.to_native(symbol)
-        data = await self._http.get("/v1/trades/ticks", params={"market": native, "count": limit})
-        return [_parse_trade(symbol, t) for t in data]
-
-    async def fetch_markets(self) -> list[Market]:
-        data = await self._http.get("/v1/market/all", params={"is_details": "true"})
-        markets = [_parse_market(m) for m in data]
-        self._markets = {m.native: m for m in markets}
-        return markets
 
     # ── Account ──
 
@@ -223,131 +160,4 @@ class Upbit(BaseExchange):
 
 
 def _map_error(status: int, data: dict[str, Any]) -> PyCexError | None:
-    err = data.get("error") or {}
-    name = err.get("name", "")
-    message = err.get("message") or "Unknown error"
-    if name.startswith("insufficient_funds"):
-        return InsufficientBalanceError(message, code=name, exchange="upbit")
-    if name in {"invalid_query_payload", "jwt_verification", "expired_access_key", "no_authorization_ip"}:
-        return AuthenticationError(message)
-    if name == "order_not_found":
-        return OrderNotFoundError(message, code=name, exchange="upbit")
-    if name == "too_many_requests":
-        # Upbit normally signals rate limiting via HTTP 429, which HTTPClient already
-        # intercepts and raises RateLimitError for before this mapper ever runs. This
-        # branch only fires if Upbit ever returns the same error name on a non-429
-        # status (e.g. a 400 body during a partial outage).
-        return RateLimitError(message, code=name, exchange="upbit")
-    if name:
-        return ExchangeError(message, code=name, exchange="upbit")
-    return None
-
-
-# ── Parsers ──
-
-
-def _parse_candle(d: dict[str, Any]) -> Candle:
-    dt = datetime.fromisoformat(d["candle_date_time_utc"]).replace(tzinfo=timezone.utc)
-    return Candle(
-        timestamp=int(dt.timestamp() * 1000),
-        open=float(d["opening_price"]),
-        high=float(d["high_price"]),
-        low=float(d["low_price"]),
-        close=float(d["trade_price"]),
-        volume=float(d["candle_acc_trade_volume"]),
-    )
-
-
-def _parse_market(d: dict[str, Any]) -> Market:
-    # Upbit's market list only ever contains tradable markets — delisting means the
-    # market disappears from `/v1/market/all` entirely, it does not flip a flag on a
-    # market that's still listed. `market_event.warning` marks investor-warning status
-    # (still tradable), not delisting, so every listed market is active; the warning
-    # flag is preserved in `raw` for callers who want to surface it.
-    native = d["market"]
-    quote, base = native.split("-", 1)
-    return Market(
-        symbol=spot(base, quote),
-        native=native,
-        base=base,
-        quote=quote,
-        market_type="spot",
-        active=True,
-        raw=d,
-    )
-
-
-def _parse_ticker(d: dict[str, Any]) -> Ticker:
-    quote, base = d["market"].split("-", 1)
-    return Ticker(
-        symbol=spot(base, quote),
-        last=float(d.get("trade_price", 0) or 0),
-        # Upbit's /v1/ticker payload carries no bid/ask — that requires /v1/orderbook.
-        bid=0.0,
-        ask=0.0,
-        high=float(d.get("high_price", 0) or 0),
-        low=float(d.get("low_price", 0) or 0),
-        volume=float(d.get("acc_trade_volume_24h", d.get("acc_trade_volume", 0)) or 0),
-        quote_volume=float(d.get("acc_trade_price_24h", d.get("acc_trade_price", 0)) or 0),
-        timestamp=int(d.get("timestamp", 0) or 0),
-        raw=d,
-    )
-
-
-def _parse_order_book(symbol: str, d: dict[str, Any], limit: int = 20) -> OrderBook:
-    units = d.get("orderbook_units", [])[:limit]
-    return OrderBook(
-        symbol=symbol,
-        bids=[OrderBookEntry(price=float(u["bid_price"]), amount=float(u["bid_size"])) for u in units],
-        asks=[OrderBookEntry(price=float(u["ask_price"]), amount=float(u["ask_size"])) for u in units],
-        timestamp=int(d.get("timestamp", 0) or 0),
-        raw=d,
-    )
-
-
-def _parse_trade(symbol: str, d: dict[str, Any]) -> Trade:
-    side = "sell" if d.get("ask_bid") == "ASK" else "buy"
-    return Trade(
-        id=str(d.get("sequential_id", "")),
-        symbol=symbol,
-        side=side,
-        price=float(d.get("trade_price", 0) or 0),
-        amount=float(d.get("trade_volume", 0) or 0),
-        timestamp=int(d.get("timestamp", 0) or 0),
-    )
-
-
-def _parse_balance(result: list[Any]) -> Balance:
-    entries = []
-    for c in result:
-        free = float(c.get("balance", 0) or 0)
-        locked = float(c.get("locked", 0) or 0)
-        if free > 0 or locked > 0:
-            entries.append(BalanceEntry(asset=c.get("currency", ""), free=free, locked=locked))
-    return Balance(assets=entries, raw={"accounts": result})
-
-
-def _parse_order(symbol: str, d: dict[str, Any]) -> Order:
-    ord_type = d.get("ord_type", "")
-    price_raw = d.get("price")
-    price = float(price_raw) if price_raw not in (None, "") and ord_type == "limit" else None
-    volume_raw = d.get("volume")
-    if volume_raw not in (None, ""):
-        amount = float(volume_raw)
-    elif price_raw not in (None, ""):
-        amount = float(price_raw)
-    else:
-        amount = 0.0
-    created_at = d.get("created_at")
-    return Order(
-        id=str(d.get("uuid", "")),
-        symbol=symbol,
-        side="buy" if d.get("side") == "bid" else "sell",
-        type="market" if ord_type in ("price", "market") else "limit",
-        amount=amount,
-        price=price,
-        filled=float(d.get("executed_volume", 0) or 0),
-        status=d.get("state", ""),
-        timestamp=_parse_iso_to_ms(created_at) if created_at else 0,
-        raw=d,
-    )
+    return map_krw_error(status, data, exchange="upbit", auth_names=_AUTH_NAMES, rate_limit_names=_RATE_LIMIT_NAMES)
