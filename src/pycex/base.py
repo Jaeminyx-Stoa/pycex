@@ -300,7 +300,19 @@ class BaseExchange(ABC):
         await self._http.close()
 
     def close_sync(self) -> None:
-        self._http.sync_close()
+        """Blocking twin of :meth:`close`.
+
+        Every ``*_sync`` wrapper drives the *async* client through ``asyncio.run``
+        (see ``_make_sync``), so this has to close that client — it used to close a
+        second, never-used ``httpx.Client``, leaving the real connection pool open
+        for the whole process after ``with Exchange() as ex:``.
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(self.close())
+            return
+        raise RuntimeError("close_sync called inside a running event loop; await close() instead")
 
     async def __aenter__(self) -> BaseExchange:
         return self

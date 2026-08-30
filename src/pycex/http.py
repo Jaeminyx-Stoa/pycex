@@ -39,19 +39,6 @@ class RateLimiter:
             else:
                 self._tokens -= 1
 
-    def wait(self) -> None:
-        now = time.monotonic()
-        elapsed = now - self._last
-        self._tokens = min(self._rate, self._tokens + elapsed * self._rate)
-        self._last = now
-        if self._tokens < 1:
-            wait = (1 - self._tokens) / self._rate
-            time.sleep(wait)
-            self._tokens = 0
-            self._last = time.monotonic()
-        else:
-            self._tokens -= 1
-
 
 class HTTPClient:
     """Async HTTP client for exchange API calls."""
@@ -68,7 +55,6 @@ class HTTPClient:
         self._base_url = base_url.rstrip("/")
         self._default_headers = default_headers or {}
         self._client = httpx.AsyncClient(base_url=self._base_url, timeout=timeout, headers=self._default_headers)
-        self._sync_client = httpx.Client(base_url=self._base_url, timeout=timeout, headers=self._default_headers)
         self._limiter = RateLimiter(rate)
         self._error_mapper = error_mapper
 
@@ -147,41 +133,6 @@ class HTTPClient:
         except httpx.HTTPError as e:
             raise NetworkError(str(e)) from e
 
-    def sync_get(
-        self, path: str, *, params: dict[str, Any] | None = None, headers: dict[str, str] | None = None
-    ) -> Any:
-        self._limiter.wait()
-        try:
-            resp = self._sync_client.get(path, params=params, headers=headers)
-            return self._handle_response(resp)
-        except httpx.HTTPError as e:
-            raise NetworkError(str(e)) from e
-
-    def sync_delete(
-        self, path: str, *, params: dict[str, Any] | None = None, headers: dict[str, str] | None = None
-    ) -> Any:
-        self._limiter.wait()
-        try:
-            resp = self._sync_client.delete(path, params=params, headers=headers)
-            return self._handle_response(resp)
-        except httpx.HTTPError as e:
-            raise NetworkError(str(e)) from e
-
-    def sync_post(
-        self,
-        path: str,
-        *,
-        data: dict[str, Any] | None = None,
-        headers: dict[str, str] | None = None,
-        params: dict[str, Any] | None = None,
-    ) -> Any:
-        self._limiter.wait()
-        try:
-            resp = self._sync_client.post(path, json=data, headers=headers, params=params)
-            return self._handle_response(resp)
-        except httpx.HTTPError as e:
-            raise NetworkError(str(e)) from e
-
     def _handle_response(self, resp: httpx.Response) -> Any:
         """Return the parsed JSON body. Shape (dict or list) depends on the endpoint."""
         if resp.status_code == 429:
@@ -206,7 +157,3 @@ class HTTPClient:
 
     async def close(self) -> None:
         await self._client.aclose()
-        self._sync_client.close()
-
-    def sync_close(self) -> None:
-        self._sync_client.close()

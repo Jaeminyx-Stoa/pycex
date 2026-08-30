@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import inspect
+import re
+
 import pytest
 
-from pycex.base import BaseExchange
+from pycex.base import _SYNC_TARGETS, BaseExchange
 from pycex.exceptions import NotSupportedError
+from pycex.http import HTTPClient
 from pycex.models import Candle
 
 
@@ -57,9 +62,6 @@ class Fake(BaseExchange):
 
     async def fetch_my_trades(self, symbol=None, *, since=None, limit=None):
         raise NotSupportedError
-
-    async def close(self) -> None:
-        pass
 
 
 async def test_candles_paginate_since_until() -> None:
@@ -168,3 +170,36 @@ async def test_forward_paging_survives_a_short_in_range_page() -> None:
     ex = ShortPageFake()
     out = await ex.fetch_candles("BTC/USDT", "1m", since=0, until=4 * 60_000)
     assert [c.timestamp for c in out] == [0, 60_000, 120_000, 180_000, 240_000]
+
+
+def test_close_sync_closes_the_async_client() -> None:
+    """`close_sync()`/`__exit__` used to close a second, never-used httpx.Client and
+    leave the AsyncClient — the one every sync wrapper actually drives through
+    asyncio.run — open."""
+    ex = Fake()
+    ex._http = HTTPClient("https://example.invalid")
+    with ex:
+        pass
+    assert ex._http._client.is_closed
+
+
+def test_close_sync_inside_running_loop_raises() -> None:
+    async def _run() -> None:
+        ex = Fake()
+        ex._http = HTTPClient("https://example.invalid")
+        with pytest.raises(RuntimeError):
+            ex.close_sync()
+        await ex._http.close()
+
+    asyncio.run(_run())
+
+
+def test_type_checking_sync_stubs_cover_every_sync_target() -> None:
+    """The TYPE_CHECKING block is hand-written while the runtime twins come from
+    __init_subclass__; a new entry in _SYNC_TARGETS must not silently ship without
+    a stub (mypy would then reject a call the runtime supports, and vice versa)."""
+    block = inspect.getsource(BaseExchange).split("if TYPE_CHECKING:")[1].split("def __init_subclass__")[0]
+    stubbed = set(re.findall(r"def (\w+)_sync\(", block))
+    assert stubbed == set(_SYNC_TARGETS)
+    ex = Fake()
+    assert all(callable(getattr(ex, f"{n}_sync")) for n in _SYNC_TARGETS)
