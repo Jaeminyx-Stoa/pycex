@@ -10,9 +10,9 @@ async def main() -> None:
     async with Binance() as binance, Bybit() as bybit, OKX() as okx:
         # Fetch BTC tickers concurrently
         binance_ticker, bybit_ticker, okx_ticker = await asyncio.gather(
-            binance.fetch_ticker("BTCUSDT"),
-            bybit.fetch_ticker("BTCUSDT"),
-            okx.fetch_ticker("BTC-USDT"),  # OKX uses dash-separated symbols
+            binance.fetch_ticker("BTC/USDT"),
+            bybit.fetch_ticker("BTC/USDT"),
+            okx.fetch_ticker("BTC/USDT"),  # canonical BASE/QUOTE across every adapter
         )
 
         print("BTC prices across exchanges:")
@@ -29,9 +29,9 @@ async def main() -> None:
 
         # Fetch ETH tickers concurrently
         eth_binance, eth_bybit, eth_okx = await asyncio.gather(
-            binance.fetch_ticker("ETHUSDT"),
-            bybit.fetch_ticker("ETHUSDT"),
-            okx.fetch_ticker("ETH-USDT"),
+            binance.fetch_ticker("ETH/USDT"),
+            bybit.fetch_ticker("ETH/USDT"),
+            okx.fetch_ticker("ETH/USDT"),
         )
 
         print("ETH prices across exchanges:")
@@ -42,8 +42,8 @@ async def main() -> None:
 
         # Fetch order books concurrently
         ob_binance, ob_bybit = await asyncio.gather(
-            binance.fetch_order_book("BTCUSDT", limit=5),
-            bybit.fetch_order_book("BTCUSDT", limit=5),
+            binance.fetch_order_book("BTC/USDT", limit=5),
+            bybit.fetch_order_book("BTC/USDT", limit=5),
         )
 
         print(f"Binance BTC best bid: ${ob_binance.bids[0].price:,.2f}")

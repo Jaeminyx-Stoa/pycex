@@ -89,13 +89,15 @@ class Bybit(BaseExchange):
     # ── Market Data ──
 
     async def fetch_ticker(self, symbol: str) -> Ticker:
-        params = {"category": self._category, "symbol": symbol}
+        native = self.to_native(symbol)
+        params = {"category": self._category, "symbol": native}
         data = await self._http.get("/v5/market/tickers", params=params)
         result = self._check(data)
-        return _parse_ticker(result["list"][0])
+        return _parse_ticker(symbol, result["list"][0])
 
     async def fetch_order_book(self, symbol: str, *, limit: int = 20) -> OrderBook:
-        params = {"category": self._category, "symbol": symbol, "limit": limit}
+        native = self.to_native(symbol)
+        params = {"category": self._category, "symbol": native, "limit": limit}
         data = await self._http.get("/v5/market/orderbook", params=params)
         result = self._check(data)
         return _parse_order_book(symbol, result)
@@ -118,10 +120,11 @@ class Bybit(BaseExchange):
         return [_parse_candle(k) for k in result.get("list", [])]
 
     async def fetch_trades(self, symbol: str, *, limit: int = 100) -> list[Trade]:
-        params = {"category": self._category, "symbol": symbol, "limit": limit}
+        native = self.to_native(symbol)
+        params = {"category": self._category, "symbol": native, "limit": limit}
         data = await self._http.get("/v5/market/recent-trade", params=params)
         result = self._check(data)
-        return [_parse_trade(t) for t in result.get("list", [])]
+        return [_parse_trade(symbol, t) for t in result.get("list", [])]
 
     async def fetch_markets(self) -> list[Market]:
         raise NotSupportedError("bybit.fetch_markets is not implemented yet")
@@ -140,9 +143,10 @@ class Bybit(BaseExchange):
     async def create_order(
         self, symbol: str, side: str, order_type: str, amount: float, price: float | None = None
     ) -> Order:
+        native = self.to_native(symbol)
         body: dict[str, Any] = {
             "category": self._category,
-            "symbol": symbol,
+            "symbol": native,
             "side": "Buy" if side.lower() == "buy" else "Sell",
             "orderType": "Limit" if order_type.lower() == "limit" else "Market",
             "qty": str(amount),
@@ -163,28 +167,30 @@ class Bybit(BaseExchange):
         )
 
     async def cancel_order(self, order_id: str, symbol: str) -> Order:
-        body = {"category": self._category, "symbol": symbol, "orderId": order_id}
+        native = self.to_native(symbol)
+        body = {"category": self._category, "symbol": native, "orderId": order_id}
         data = await self._http.post("/v5/order/cancel", data=body, headers=self._auth_post_headers(body))
         result = self._check(data)
         return Order(id=result.get("orderId", order_id), symbol=symbol, side="", type="", amount=0, raw=data)
 
     async def fetch_order(self, order_id: str, symbol: str) -> Order:
-        query = f"category={self._category}&symbol={symbol}&orderId={order_id}"
-        params = {"category": self._category, "symbol": symbol, "orderId": order_id}
+        native = self.to_native(symbol)
+        query = f"category={self._category}&symbol={native}&orderId={order_id}"
+        params = {"category": self._category, "symbol": native, "orderId": order_id}
         data = await self._http.get("/v5/order/realtime", params=params, headers=self._auth_get_headers(query))
         result = self._check(data)
         if result.get("list"):
-            return _parse_order(result["list"][0])
+            return _parse_order(symbol, result["list"][0])
         return Order(id=order_id, symbol=symbol, side="", type="", amount=0)
 
     async def fetch_open_orders(self, symbol: str | None = None) -> list[Order]:
         params: dict[str, Any] = {"category": self._category}
         if symbol:
-            params["symbol"] = symbol
+            params["symbol"] = self.to_native(symbol)
         query = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
         data = await self._http.get("/v5/order/realtime", params=params, headers=self._auth_get_headers(query))
         result = self._check(data)
-        return [_parse_order(o) for o in result.get("list", [])]
+        return [_parse_order(self.from_native(o.get("symbol", "")), o) for o in result.get("list", [])]
 
     async def fetch_my_trades(
         self, symbol: str | None = None, *, since: int | None = None, limit: int | None = None
@@ -195,9 +201,9 @@ class Bybit(BaseExchange):
 # ── Parsers ──
 
 
-def _parse_ticker(d: dict[str, Any]) -> Ticker:
+def _parse_ticker(symbol: str, d: dict[str, Any]) -> Ticker:
     return Ticker(
-        symbol=d.get("symbol", ""),
+        symbol=symbol,
         last=float(d.get("lastPrice", 0)),
         bid=float(d.get("bid1Price", 0)),
         ask=float(d.get("ask1Price", 0)),
@@ -230,10 +236,10 @@ def _parse_candle(k: list[Any]) -> Candle:
     )
 
 
-def _parse_trade(t: dict[str, Any]) -> Trade:
+def _parse_trade(symbol: str, t: dict[str, Any]) -> Trade:
     return Trade(
         id=t.get("execId", ""),
-        symbol=t.get("symbol", ""),
+        symbol=symbol,
         side=t.get("side", "").lower(),
         price=float(t.get("price", 0)),
         amount=float(t.get("size", 0)),
@@ -252,10 +258,10 @@ def _parse_balance(result: dict[str, Any], raw: dict[str, Any]) -> Balance:
     return Balance(assets=entries, raw=raw)
 
 
-def _parse_order(d: dict[str, Any]) -> Order:
+def _parse_order(symbol: str, d: dict[str, Any]) -> Order:
     return Order(
         id=d.get("orderId", ""),
-        symbol=d.get("symbol", ""),
+        symbol=symbol,
         side=d.get("side", "").lower(),
         type=d.get("orderType", "").lower(),
         amount=float(d.get("qty", 0)),

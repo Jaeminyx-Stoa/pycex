@@ -99,11 +99,13 @@ class Bitget(BaseExchange):
     # ── Market Data (public, no signing) ──
 
     async def fetch_ticker(self, symbol: str) -> Ticker:
-        data = await self._http.get("/api/v2/spot/market/tickers", params={"symbol": symbol})
-        return _parse_ticker(self._check(data)[0])
+        native = self.to_native(symbol)
+        data = await self._http.get("/api/v2/spot/market/tickers", params={"symbol": native})
+        return _parse_ticker(symbol, self._check(data)[0])
 
     async def fetch_order_book(self, symbol: str, *, limit: int = 20) -> OrderBook:
-        data = await self._http.get("/api/v2/spot/market/orderbook", params={"symbol": symbol, "limit": limit})
+        native = self.to_native(symbol)
+        data = await self._http.get("/api/v2/spot/market/orderbook", params={"symbol": native, "limit": limit})
         return _parse_order_book(symbol, self._check(data)[0])
 
     async def _fetch_candles_page(
@@ -122,8 +124,9 @@ class Bitget(BaseExchange):
         return [_parse_candle(k) for k in self._check(data)]
 
     async def fetch_trades(self, symbol: str, *, limit: int = 100) -> list[Trade]:
-        data = await self._http.get("/api/v2/spot/market/fills", params={"symbol": symbol, "limit": limit})
-        return [_parse_trade(t) for t in self._check(data)]
+        native = self.to_native(symbol)
+        data = await self._http.get("/api/v2/spot/market/fills", params={"symbol": native, "limit": limit})
+        return [_parse_trade(symbol, t) for t in self._check(data)]
 
     async def fetch_markets(self) -> list[Market]:
         raise NotSupportedError("bitget.fetch_markets is not implemented yet")
@@ -141,8 +144,9 @@ class Bitget(BaseExchange):
         self, symbol: str, side: str, order_type: str, amount: float, price: float | None = None
     ) -> Order:
         path = "/api/v2/spot/trade/place-order"
+        native = self.to_native(symbol)
         body: dict[str, Any] = {
-            "symbol": symbol,
+            "symbol": native,
             "side": side.lower(),
             "orderType": "limit" if order_type.lower() == "limit" else "market",
             "size": str(amount),
@@ -167,7 +171,8 @@ class Bitget(BaseExchange):
 
     async def cancel_order(self, order_id: str, symbol: str) -> Order:
         path = "/api/v2/spot/trade/cancel-order"
-        body = {"symbol": symbol, "orderId": order_id}
+        native = self.to_native(symbol)
+        body = {"symbol": native, "orderId": order_id}
         body_str = json.dumps(body)
         data = await self._http.post(path, data=body, headers=self._signed_post(path, body_str))
         r = self._check(data)
@@ -175,15 +180,17 @@ class Bitget(BaseExchange):
         return Order(id=first.get("orderId", order_id), symbol=symbol, side="", type="", amount=0, raw=data)
 
     async def fetch_order(self, order_id: str, symbol: str) -> Order:
+        # Bitget's order-info endpoint is keyed by orderId only — no symbol filter to convert.
         path = self._path("/api/v2/spot/trade/orderInfo", {"orderId": order_id})
         data = await self._http.get(path, headers=self._signed_get(path))
         r = self._check(data)
-        return _parse_order(r[0]) if r else Order(id=order_id, symbol=symbol, side="", type="", amount=0)
+        return _parse_order(symbol, r[0]) if r else Order(id=order_id, symbol=symbol, side="", type="", amount=0)
 
     async def fetch_open_orders(self, symbol: str | None = None) -> list[Order]:
-        path = self._path("/api/v2/spot/trade/unfilled-orders", {"symbol": symbol} if symbol else None)
+        native = self.to_native(symbol) if symbol else None
+        path = self._path("/api/v2/spot/trade/unfilled-orders", {"symbol": native} if native else None)
         data = await self._http.get(path, headers=self._signed_get(path))
-        return [_parse_order(o) for o in self._check(data)]
+        return [_parse_order(self.from_native(o.get("symbol", "")), o) for o in self._check(data)]
 
     async def fetch_my_trades(
         self, symbol: str | None = None, *, since: int | None = None, limit: int | None = None
@@ -194,9 +201,9 @@ class Bitget(BaseExchange):
 # ── Parsers ──
 
 
-def _parse_ticker(d: dict[str, Any]) -> Ticker:
+def _parse_ticker(symbol: str, d: dict[str, Any]) -> Ticker:
     return Ticker(
-        symbol=d.get("symbol", ""),
+        symbol=symbol,
         last=float(d.get("lastPr", 0) or 0),
         bid=float(d.get("bidPr", 0) or 0),
         ask=float(d.get("askPr", 0) or 0),
@@ -230,10 +237,10 @@ def _parse_candle(k: list[Any]) -> Candle:
     )
 
 
-def _parse_trade(t: dict[str, Any]) -> Trade:
+def _parse_trade(symbol: str, t: dict[str, Any]) -> Trade:
     return Trade(
         id=str(t.get("tradeId", "")),
-        symbol=t.get("symbol", ""),
+        symbol=symbol,
         side=t.get("side", "").lower(),
         price=float(t.get("price", 0) or 0),
         amount=float(t.get("size", 0) or 0),
@@ -251,11 +258,11 @@ def _parse_balance(result: list[Any], raw: dict[str, Any]) -> Balance:
     return Balance(assets=entries, raw=raw)
 
 
-def _parse_order(d: dict[str, Any]) -> Order:
+def _parse_order(symbol: str, d: dict[str, Any]) -> Order:
     price = float(d.get("price", 0) or 0)
     return Order(
         id=str(d.get("orderId", "")),
-        symbol=d.get("symbol", ""),
+        symbol=symbol,
         side=d.get("side", "").lower(),
         type=d.get("orderType", "").lower(),
         amount=float(d.get("size", 0) or 0),

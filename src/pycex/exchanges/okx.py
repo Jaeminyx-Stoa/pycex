@@ -89,12 +89,14 @@ class OKX(BaseExchange):
     # ── Market Data ──
 
     async def fetch_ticker(self, symbol: str) -> Ticker:
-        data = await self._http.get("/api/v5/market/ticker", params={"instId": symbol})
+        native = self.to_native(symbol)
+        data = await self._http.get("/api/v5/market/ticker", params={"instId": native})
         result = self._check(data)
-        return _parse_ticker(result[0])
+        return _parse_ticker(symbol, result[0])
 
     async def fetch_order_book(self, symbol: str, *, limit: int = 20) -> OrderBook:
-        data = await self._http.get("/api/v5/market/books", params={"instId": symbol, "sz": limit})
+        native = self.to_native(symbol)
+        data = await self._http.get("/api/v5/market/books", params={"instId": native, "sz": limit})
         result = self._check(data)
         return _parse_order_book(symbol, result[0] if result else {})
 
@@ -106,18 +108,24 @@ class OKX(BaseExchange):
             "bar": _TIMEFRAME_MAP.get(timeframe, timeframe),
             "limit": str(limit),
         }
+        # OKX semantics: after=ts -> records OLDER than ts; before=ts -> records NEWER
+        # than ts. The two must never be sent together. When `since` is given we only
+        # need a lower bound (`before`); the base class's post-page filtering already
+        # trims anything past `until`. When only `until` is given (single-page, no
+        # since), we need an upper bound (`after`).
         if since is not None:
-            params["after"] = str(since - 1)
-        if until is not None:
-            params["before"] = str(until + 1)
+            params["before"] = str(since - 1)
+        elif until is not None:
+            params["after"] = str(until + 1)
         data = await self._http.get("/api/v5/market/candles", params=params)
         result = self._check(data)
         return [_parse_candle(k) for k in result]
 
     async def fetch_trades(self, symbol: str, *, limit: int = 100) -> list[Trade]:
-        data = await self._http.get("/api/v5/market/trades", params={"instId": symbol, "limit": str(limit)})
+        native = self.to_native(symbol)
+        data = await self._http.get("/api/v5/market/trades", params={"instId": native, "limit": str(limit)})
         result = self._check(data)
-        return [_parse_trade(t) for t in result]
+        return [_parse_trade(symbol, t) for t in result]
 
     async def fetch_markets(self) -> list[Market]:
         raise NotSupportedError("okx.fetch_markets is not implemented yet")
@@ -136,8 +144,9 @@ class OKX(BaseExchange):
         self, symbol: str, side: str, order_type: str, amount: float, price: float | None = None
     ) -> Order:
         path = "/api/v5/trade/order"
+        native = self.to_native(symbol)
         body: dict[str, Any] = {
-            "instId": symbol,
+            "instId": native,
             "tdMode": "cash",
             "side": side.lower(),
             "ordType": "limit" if order_type.lower() == "limit" else "market",
@@ -163,7 +172,8 @@ class OKX(BaseExchange):
 
     async def cancel_order(self, order_id: str, symbol: str) -> Order:
         path = "/api/v5/trade/cancel-order"
-        body = {"instId": symbol, "ordId": order_id}
+        native = self.to_native(symbol)
+        body = {"instId": native, "ordId": order_id}
         body_str = json.dumps(body)
         data = await self._http.post(path, data=body, headers=self._auth_headers("POST", path, body_str))
         result = self._check(data)
@@ -171,28 +181,30 @@ class OKX(BaseExchange):
         return Order(id=r.get("ordId", order_id), symbol=symbol, side="", type="", amount=0, raw=data)
 
     async def fetch_order(self, order_id: str, symbol: str) -> Order:
-        path = f"/api/v5/trade/order?instId={symbol}&ordId={order_id}"
+        native = self.to_native(symbol)
+        path = f"/api/v5/trade/order?instId={native}&ordId={order_id}"
         data = await self._http.get(
             "/api/v5/trade/order",
-            params={"instId": symbol, "ordId": order_id},
+            params={"instId": native, "ordId": order_id},
             headers=self._auth_headers("GET", path),
         )
         result = self._check(data)
         if result:
-            return _parse_order(result[0])
+            return _parse_order(symbol, result[0])
         return Order(id=order_id, symbol=symbol, side="", type="", amount=0)
 
     async def fetch_open_orders(self, symbol: str | None = None) -> list[Order]:
         params: dict[str, Any] = {}
         path = "/api/v5/trade/orders-pending"
-        if symbol:
-            params["instId"] = symbol
-            path += f"?instId={symbol}"
+        native = self.to_native(symbol) if symbol else None
+        if native:
+            params["instId"] = native
+            path += f"?instId={native}"
         data = await self._http.get(
             "/api/v5/trade/orders-pending", params=params or None, headers=self._auth_headers("GET", path)
         )
         result = self._check(data)
-        return [_parse_order(o) for o in result]
+        return [_parse_order(self.from_native(o.get("instId", "")), o) for o in result]
 
     async def fetch_my_trades(
         self, symbol: str | None = None, *, since: int | None = None, limit: int | None = None
@@ -203,9 +215,9 @@ class OKX(BaseExchange):
 # ── Parsers ──
 
 
-def _parse_ticker(d: dict[str, Any]) -> Ticker:
+def _parse_ticker(symbol: str, d: dict[str, Any]) -> Ticker:
     return Ticker(
-        symbol=d.get("instId", ""),
+        symbol=symbol,
         last=float(d.get("last", 0)),
         bid=float(d.get("bidPx", 0)),
         ask=float(d.get("askPx", 0)),
@@ -239,10 +251,10 @@ def _parse_candle(k: list[Any]) -> Candle:
     )
 
 
-def _parse_trade(t: dict[str, Any]) -> Trade:
+def _parse_trade(symbol: str, t: dict[str, Any]) -> Trade:
     return Trade(
         id=t.get("tradeId", ""),
-        symbol=t.get("instId", ""),
+        symbol=symbol,
         side=t.get("side", "").lower(),
         price=float(t.get("px", 0)),
         amount=float(t.get("sz", 0)),
@@ -261,10 +273,10 @@ def _parse_balance(result: list[Any], raw: dict[str, Any]) -> Balance:
     return Balance(assets=entries, raw=raw)
 
 
-def _parse_order(d: dict[str, Any]) -> Order:
+def _parse_order(symbol: str, d: dict[str, Any]) -> Order:
     return Order(
         id=d.get("ordId", ""),
-        symbol=d.get("instId", ""),
+        symbol=symbol,
         side=d.get("side", "").lower(),
         type=d.get("ordType", "").lower(),
         amount=float(d.get("sz", 0)),

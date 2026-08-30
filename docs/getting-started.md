@@ -24,13 +24,15 @@ pip install pycex[dev]
 ## Basic Usage
 
 Public market data requires no API key. Use a context manager to ensure
-connections are properly cleaned up:
+connections are properly cleaned up. Symbols are always the canonical
+`BASE/QUOTE` notation (e.g. `BTC/USDT`) regardless of exchange — each adapter
+converts it to that exchange's native format internally:
 
 ```python
 from pycex import Binance
 
 with Binance() as ex:
-    ticker = ex.fetch_ticker_sync("BTCUSDT")
+    ticker = ex.fetch_ticker_sync("BTC/USDT")
     print(f"BTC: ${ticker.last:,.2f}")
     print(f"Bid: ${ticker.bid:,.2f}  Ask: ${ticker.ask:,.2f}")
     print(f"24h High: ${ticker.high:,.2f}  Low: ${ticker.low:,.2f}")
@@ -42,7 +44,7 @@ with Binance() as ex:
 from pycex import Binance
 
 with Binance() as ex:
-    ob = ex.fetch_order_book_sync("ETHUSDT", limit=10)
+    ob = ex.fetch_order_book_sync("ETH/USDT", limit=10)
     print(f"ETH/USDT Order Book")
     for ask in ob.asks[:5]:
         print(f"  Ask: ${ask.price:,.2f} x {ask.amount:,.4f}")
@@ -60,10 +62,10 @@ from pycex import Binance
 
 async def main():
     async with Binance() as ex:
-        ticker = await ex.fetch_ticker("BTCUSDT")
-        ob = await ex.fetch_order_book("BTCUSDT", limit=5)
-        candles = await ex.fetch_candles("BTCUSDT", "1h", limit=24)
-        trades = await ex.fetch_trades("BTCUSDT", limit=10)
+        ticker = await ex.fetch_ticker("BTC/USDT")
+        ob = await ex.fetch_order_book("BTC/USDT", limit=5)
+        candles = await ex.fetch_candles("BTC/USDT", "1h", limit=24)
+        trades = await ex.fetch_trades("BTC/USDT", limit=10)
 
         print(f"BTC: ${ticker.last:,.2f}")
         print(f"Best bid: ${ob.bids[0].price:,.2f}")
@@ -106,28 +108,29 @@ with Binance(api_key="YOUR_KEY", secret="YOUR_SECRET") as ex:
         print(f"{asset.asset}: free={asset.free}, locked={asset.locked}")
 
     # Place a limit buy order
-    order = ex.create_order_sync("BTCUSDT", "buy", "limit", amount=0.001, price=50000.0)
+    order = ex.create_order_sync("BTC/USDT", "buy", "limit", amount=0.001, price=50000.0)
     print(f"Order placed: {order.id}, status={order.status}")
 ```
 
 ## Testnet / Demo Mode
 
-All exchanges support testnet mode for safe testing:
+All exchanges support a unified `sandbox=True` flag for safe testing (the
+older `testnet=`/`demo=` kwargs still work but are deprecated):
 
 ```python
 from pycex import Binance, Bybit, OKX
 
 # Binance testnet
-with Binance(api_key="KEY", secret="SECRET", testnet=True) as ex:
-    ticker = ex.fetch_ticker_sync("BTCUSDT")
+with Binance(api_key="KEY", secret="SECRET", sandbox=True) as ex:
+    ticker = ex.fetch_ticker_sync("BTC/USDT")
 
 # Bybit testnet
-with Bybit(api_key="KEY", secret="SECRET", testnet=True) as ex:
-    ticker = ex.fetch_ticker_sync("BTCUSDT")
+with Bybit(api_key="KEY", secret="SECRET", sandbox=True) as ex:
+    ticker = ex.fetch_ticker_sync("BTC/USDT")
 
 # OKX demo mode
-with OKX(api_key="KEY", secret="SECRET", passphrase="PASS", demo=True) as ex:
-    ticker = ex.fetch_ticker_sync("BTC-USDT")
+with OKX(api_key="KEY", secret="SECRET", passphrase="PASS", sandbox=True) as ex:
+    ticker = ex.fetch_ticker_sync("BTC/USDT")
 ```
 
 ## Raw API Responses
@@ -138,7 +141,7 @@ Every model has a `.raw` field containing the original exchange response:
 from pycex import Binance
 
 with Binance() as ex:
-    ticker = ex.fetch_ticker_sync("BTCUSDT")
+    ticker = ex.fetch_ticker_sync("BTC/USDT")
 
     # Access the original Binance API response
     print(ticker.raw)
@@ -161,7 +164,7 @@ from pycex.exceptions import (
 
 with Binance() as ex:
     try:
-        ticker = ex.fetch_ticker_sync("INVALID_SYMBOL")
+        ticker = ex.fetch_ticker_sync("INVALID/SYMBOL")
     except RateLimitError:
         print("Rate limited, try again later")
     except ExchangeError as e:

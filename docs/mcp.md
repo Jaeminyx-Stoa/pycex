@@ -80,17 +80,17 @@ The MCP server exposes the following tools:
 ### get_ticker
 
 ```python
-# MCP tool call
-get_ticker(symbol="BTCUSDT")
-# Returns: {"symbol": "BTCUSDT", "last": 67000.0, "bid": 66999.0, "ask": 67001.0, ...}
+# MCP tool call — symbol is always canonical BASE/QUOTE, e.g. "BTC/USDT"
+get_ticker(symbol="BTC/USDT")
+# Returns: {"symbol": "BTC/USDT", "last": 67000.0, "bid": 66999.0, "ask": 67001.0, ...}
 ```
 
 ### get_order_book
 
 ```python
 # MCP tool call
-get_order_book(symbol="BTCUSDT", limit=10)
-# Returns: {"symbol": "BTCUSDT", "bids": [...], "asks": [...]}
+get_order_book(symbol="BTC/USDT", limit=10)
+# Returns: {"symbol": "BTC/USDT", "bids": [...], "asks": [...]}
 ```
 
 ### get_balance
@@ -105,16 +105,16 @@ get_balance()
 
 ```python
 # MCP tool call — limit buy
-place_order(symbol="BTCUSDT", side="buy", order_type="limit", amount=0.001, price=50000.0)
-# Returns: {"id": "12345", "symbol": "BTCUSDT", "side": "buy", ...}
+place_order(symbol="BTC/USDT", side="buy", order_type="limit", amount=0.001, price=50000.0)
+# Returns: {"id": "12345", "symbol": "BTC/USDT", "side": "buy", ...}
 ```
 
 ### cancel_order
 
 ```python
 # MCP tool call
-cancel_order(order_id="12345", symbol="BTCUSDT")
-# Returns: {"id": "12345", "symbol": "BTCUSDT", "status": "canceled"}
+cancel_order(order_id="12345", symbol="BTC/USDT")
+# Returns: {"id": "12345", "symbol": "BTC/USDT", "status": "canceled"}
 ```
 
 ## Programmatic Usage

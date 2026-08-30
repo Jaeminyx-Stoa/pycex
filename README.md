@@ -30,7 +30,7 @@ from pycex import Binance
 
 # 시세 조회 (인증 불필요)
 with Binance() as ex:
-    ticker = ex.fetch_ticker_sync("BTCUSDT")
+    ticker = ex.fetch_ticker_sync("BTC/USDT")
     print(f"BTC: ${ticker.last:,.2f}")
     print(f"  Bid: ${ticker.bid:,.2f}  Ask: ${ticker.ask:,.2f}")
     print(f"  24h High: ${ticker.high:,.2f}  Low: ${ticker.low:,.2f}")
@@ -39,7 +39,9 @@ with Binance() as ex:
 
 ## Multi-Exchange
 
-동일한 인터페이스로 거래소를 교체할 수 있습니다:
+동일한 인터페이스로 거래소를 교체할 수 있습니다. 심볼은 거래소와 무관하게 항상
+`BASE/QUOTE` 표준 표기(예: `BTC/USDT`)를 씁니다 — 각 어댑터가 내부적으로
+거래소별 네이티브 표기(`BTCUSDT`, `BTC-USDT` 등)로 변환합니다:
 
 ```python
 from pycex import Binance, Bybit, OKX
@@ -47,7 +49,7 @@ from pycex import Binance, Bybit, OKX
 # 같은 코드로 다른 거래소 사용
 for ExchangeClass in [Binance, Bybit, OKX]:
     with ExchangeClass() as ex:
-        ticker = ex.fetch_ticker_sync("BTCUSDT")
+        ticker = ex.fetch_ticker_sync("BTC/USDT")
         print(f"{ex.name}: BTC = ${ticker.last:,.2f}")
 ```
 
@@ -59,9 +61,9 @@ from pycex import Binance
 
 async def main():
     async with Binance() as ex:
-        ticker = await ex.fetch_ticker("BTCUSDT")
-        ob = await ex.fetch_order_book("BTCUSDT", limit=5)
-        candles = await ex.fetch_candles("BTCUSDT", "1h", limit=24)
+        ticker = await ex.fetch_ticker("BTC/USDT")
+        ob = await ex.fetch_order_book("BTC/USDT", limit=5)
+        candles = await ex.fetch_candles("BTC/USDT", "1h", limit=24)
 
         print(f"BTC: ${ticker.last:,.2f}")
         print(f"Best bid: ${ob.bids[0].price:,.2f} × {ob.bids[0].amount}")
@@ -76,7 +78,7 @@ asyncio.run(main())
 from pycex import Binance
 
 with Binance() as ex:
-    ob = ex.fetch_order_book_sync("ETHUSDT", limit=10)
+    ob = ex.fetch_order_book_sync("ETH/USDT", limit=10)
     print("Asks:")
     for ask in ob.asks[:5]:
         print(f"  ${ask.price:,.2f} × {ask.amount:,.4f}")
@@ -90,7 +92,7 @@ with Binance() as ex:
 ```python
 from pycex import Binance
 
-with Binance(api_key="YOUR_KEY", secret="YOUR_SECRET", testnet=True) as ex:
+with Binance(api_key="YOUR_KEY", secret="YOUR_SECRET", sandbox=True) as ex:
     # 잔고 조회
     balance = ex.fetch_balance_sync()
     btc = balance.get("BTC")
@@ -98,11 +100,11 @@ with Binance(api_key="YOUR_KEY", secret="YOUR_SECRET", testnet=True) as ex:
         print(f"BTC: free={btc.free}, locked={btc.locked}, total={btc.total}")
 
     # Limit 매수
-    order = ex.create_order_sync("BTCUSDT", "buy", "limit", amount=0.001, price=50000.0)
+    order = ex.create_order_sync("BTC/USDT", "buy", "limit", amount=0.001, price=50000.0)
     print(f"Order placed: {order.id}")
 
     # 주문 취소
-    canceled = ex.cancel_order_sync(order.id, "BTCUSDT")
+    canceled = ex.cancel_order_sync(order.id, "BTC/USDT")
     print(f"Canceled: {canceled.id}")
 ```
 
@@ -112,9 +114,9 @@ with Binance(api_key="YOUR_KEY", secret="YOUR_SECRET", testnet=True) as ex:
 from pycex import Bybit
 
 with Bybit() as ex:
-    candles = ex.fetch_order_book_sync("BTCUSDT", limit=5)
+    candles = ex.fetch_order_book_sync("BTC/USDT", limit=5)
     # 일봉
-    candles = ex.fetch_candles("BTCUSDT", "1d", limit=30)  # async
+    candles = ex.fetch_candles("BTC/USDT", "1d", limit=30)  # async
 ```
 
 지원 timeframe: `1m`, `5m`, `15m`, `1h`, `4h`, `1d`, `1w`
@@ -125,9 +127,9 @@ with Bybit() as ex:
 from pycex import Bybit
 
 with Bybit(api_key="KEY", secret="SECRET") as ex:
-    ticker = ex.fetch_ticker_sync("BTCUSDT")
+    ticker = ex.fetch_ticker_sync("BTC/USDT")
     balance = ex.fetch_balance_sync()
-    order = ex.create_order_sync("BTCUSDT", "buy", "limit", 0.001, 50000.0)
+    order = ex.create_order_sync("BTC/USDT", "buy", "limit", 0.001, 50000.0)
 ```
 
 ## OKX
@@ -136,9 +138,9 @@ with Bybit(api_key="KEY", secret="SECRET") as ex:
 from pycex import OKX
 
 with OKX(api_key="KEY", secret="SECRET", passphrase="PASS") as ex:
-    ticker = ex.fetch_ticker_sync("BTC-USDT")
+    ticker = ex.fetch_ticker_sync("BTC/USDT")
     balance = ex.fetch_balance_sync()
-    order = ex.create_order_sync("BTC-USDT", "buy", "limit", 0.001, 50000.0)
+    order = ex.create_order_sync("BTC/USDT", "buy", "limit", 0.001, 50000.0)
 ```
 
 ## Raw API Response
@@ -149,7 +151,7 @@ with OKX(api_key="KEY", secret="SECRET", passphrase="PASS") as ex:
 from pycex import Binance
 
 with Binance() as ex:
-    ticker = ex.fetch_ticker_sync("BTCUSDT")
+    ticker = ex.fetch_ticker_sync("BTC/USDT")
     print(ticker.raw)  # Original Binance API response dict
 ```
 
@@ -160,18 +162,18 @@ export PYCEX_EXCHANGE=binance
 export PYCEX_API_KEY="your_key"
 export PYCEX_SECRET="your_secret"
 
-pycex ticker BTCUSDT              # 시세 조회
-pycex orderbook BTCUSDT           # 호가창
-pycex balance                     # 잔고
-pycex buy BTCUSDT 0.001 50000     # 매수
-pycex sell BTCUSDT 0.001 55000    # 매도
+pycex ticker BTC/USDT              # 시세 조회
+pycex orderbook BTC/USDT           # 호가창
+pycex balance                      # 잔고
+pycex buy BTC/USDT 0.001 50000     # 매수
+pycex sell BTC/USDT 0.001 55000    # 매도
 
 # 거래소 지정
-pycex -e bybit ticker BTCUSDT
-pycex -e okx ticker BTC-USDT
+pycex -e bybit ticker BTC/USDT
+pycex -e okx ticker BTC/USDT
 
 # Testnet + JSON
-pycex --testnet --json ticker BTCUSDT
+pycex --testnet --json ticker BTC/USDT
 ```
 
 ## MCP Server (Claude Desktop)
@@ -205,11 +207,15 @@ pycex --testnet --json ticker BTCUSDT
 
 ## Supported Exchanges
 
-| Exchange | Symbol Format | Testnet |
-|----------|--------------|---------|
-| Binance | `BTCUSDT` | `testnet=True` |
-| Bybit | `BTCUSDT` | `testnet=True` |
-| OKX | `BTC-USDT` | `demo=True` |
+심볼은 모든 거래소에서 동일하게 표준 표기(`BASE/QUOTE`, 예: `BTC/USDT`)를 씁니다 —
+아래 "Native Format"은 각 어댑터가 내부적으로 거래소 API에 보내는 표기일 뿐,
+호출부에서 직접 쓰지 않습니다.
+
+| Exchange | Native Format (internal) | Sandbox |
+|----------|--------------------------|---------|
+| Binance | `BTCUSDT` | `sandbox=True` |
+| Bybit | `BTCUSDT` | `sandbox=True` |
+| OKX | `BTC-USDT` | `sandbox=True` |
 
 ## Environment Variables
 

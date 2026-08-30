@@ -75,11 +75,13 @@ class Binance(BaseExchange):
     # ── Market Data ──
 
     async def fetch_ticker(self, symbol: str) -> Ticker:
-        data = await self._http.get("/api/v3/ticker/24hr", params={"symbol": symbol})
-        return _parse_ticker(data)
+        native = self.to_native(symbol)
+        data = await self._http.get("/api/v3/ticker/24hr", params={"symbol": native})
+        return _parse_ticker(symbol, data)
 
     async def fetch_order_book(self, symbol: str, *, limit: int = 20) -> OrderBook:
-        data = await self._http.get("/api/v3/depth", params={"symbol": symbol, "limit": limit})
+        native = self.to_native(symbol)
+        data = await self._http.get("/api/v3/depth", params={"symbol": native, "limit": limit})
         return _parse_order_book(symbol, data)
 
     async def _fetch_candles_page(
@@ -98,7 +100,8 @@ class Binance(BaseExchange):
         return [_parse_candle(k) for k in data]
 
     async def fetch_trades(self, symbol: str, *, limit: int = 100) -> list[Trade]:
-        data = await self._http.get("/api/v3/trades", params={"symbol": symbol, "limit": limit})
+        native = self.to_native(symbol)
+        data = await self._http.get("/api/v3/trades", params={"symbol": native, "limit": limit})
         return [_parse_trade(symbol, t) for t in data]
 
     async def fetch_markets(self) -> list[Market]:
@@ -116,8 +119,9 @@ class Binance(BaseExchange):
     async def create_order(
         self, symbol: str, side: str, order_type: str, amount: float, price: float | None = None
     ) -> Order:
+        native = self.to_native(symbol)
         params: dict[str, Any] = {
-            "symbol": symbol,
+            "symbol": native,
             "side": side.upper(),
             "type": order_type.upper(),
             "quantity": str(amount),
@@ -127,25 +131,27 @@ class Binance(BaseExchange):
             params["timeInForce"] = "GTC"
         params = self._signed_params(params)
         data = await self._http.post("/api/v3/order", params=params, headers=self._auth_headers())
-        return _parse_order(data)
+        return _parse_order(symbol, data)
 
     async def cancel_order(self, order_id: str, symbol: str) -> Order:
-        params = self._signed_params({"symbol": symbol, "orderId": order_id})
+        native = self.to_native(symbol)
+        params = self._signed_params({"symbol": native, "orderId": order_id})
         data = await self._http.delete("/api/v3/order", params=params, headers=self._auth_headers())
-        return _parse_order(data)
+        return _parse_order(symbol, data)
 
     async def fetch_order(self, order_id: str, symbol: str) -> Order:
-        params = self._signed_params({"symbol": symbol, "orderId": order_id})
+        native = self.to_native(symbol)
+        params = self._signed_params({"symbol": native, "orderId": order_id})
         data = await self._http.get("/api/v3/order", params=params, headers=self._auth_headers())
-        return _parse_order(data)
+        return _parse_order(symbol, data)
 
     async def fetch_open_orders(self, symbol: str | None = None) -> list[Order]:
         p: dict[str, Any] = {}
         if symbol:
-            p["symbol"] = symbol
+            p["symbol"] = self.to_native(symbol)
         params = self._signed_params(p)
         data = await self._http.get("/api/v3/openOrders", params=params, headers=self._auth_headers())
-        return [_parse_order(o) for o in data]
+        return [_parse_order(self.from_native(o.get("symbol", "")), o) for o in data]
 
     async def fetch_my_trades(
         self, symbol: str | None = None, *, since: int | None = None, limit: int | None = None
@@ -156,9 +162,9 @@ class Binance(BaseExchange):
 # ── Parsers ──
 
 
-def _parse_ticker(d: dict[str, Any]) -> Ticker:
+def _parse_ticker(symbol: str, d: dict[str, Any]) -> Ticker:
     return Ticker(
-        symbol=d["symbol"],
+        symbol=symbol,
         last=float(d["lastPrice"]),
         bid=float(d["bidPrice"]),
         ask=float(d["askPrice"]),
@@ -212,10 +218,10 @@ def _parse_balance(d: dict[str, Any]) -> Balance:
     return Balance(assets=entries, raw=d)
 
 
-def _parse_order(d: dict[str, Any]) -> Order:
+def _parse_order(symbol: str, d: dict[str, Any]) -> Order:
     return Order(
         id=str(d.get("orderId", "")),
-        symbol=d.get("symbol", ""),
+        symbol=symbol,
         side=d.get("side", "").lower(),
         type=d.get("type", "").lower(),
         amount=float(d.get("origQty", 0)),

@@ -11,13 +11,13 @@ def bybit_sync_example() -> None:
 
     with Bybit() as ex:
         # Ticker
-        ticker = ex.fetch_ticker_sync("BTCUSDT")
+        ticker = ex.fetch_ticker_sync("BTC/USDT")
         print(f"BTC/USDT: ${ticker.last:,.2f}")
         print(f"  Bid: ${ticker.bid:,.2f}  Ask: ${ticker.ask:,.2f}")
         print(f"  24h Volume: {ticker.volume:,.2f}")
 
         # Order book
-        ob = ex.fetch_order_book_sync("ETHUSDT", limit=5)
+        ob = ex.fetch_order_book_sync("ETH/USDT", limit=5)
         print(f"\nETH/USDT Order Book:")
         print(f"  Best Ask: ${ob.asks[0].price:,.2f} x {ob.asks[0].amount:,.4f}")
         print(f"  Best Bid: ${ob.bids[0].price:,.2f} x {ob.bids[0].amount:,.4f}")
@@ -25,19 +25,21 @@ def bybit_sync_example() -> None:
 
 
 def okx_sync_example() -> None:
-    """OKX synchronous market data. Note: OKX uses dash-separated symbols."""
+    """OKX synchronous market data. Symbols are canonical (BASE/QUOTE) same as
+    every other adapter — OKX's own dash-separated native format (BTC-USDT) is
+    an internal detail handled by to_native()/from_native()."""
     print("\n=== OKX (sync) ===")
 
     with OKX() as ex:
-        # Ticker (OKX uses BTC-USDT format)
-        ticker = ex.fetch_ticker_sync("BTC-USDT")
-        print(f"BTC-USDT: ${ticker.last:,.2f}")
+        # Ticker
+        ticker = ex.fetch_ticker_sync("BTC/USDT")
+        print(f"BTC/USDT: ${ticker.last:,.2f}")
         print(f"  Bid: ${ticker.bid:,.2f}  Ask: ${ticker.ask:,.2f}")
         print(f"  24h Volume: {ticker.volume:,.2f}")
 
         # Order book
-        ob = ex.fetch_order_book_sync("ETH-USDT", limit=5)
-        print(f"\nETH-USDT Order Book:")
+        ob = ex.fetch_order_book_sync("ETH/USDT", limit=5)
+        print(f"\nETH/USDT Order Book:")
         print(f"  Best Ask: ${ob.asks[0].price:,.2f} x {ob.asks[0].amount:,.4f}")
         print(f"  Best Bid: ${ob.bids[0].price:,.2f} x {ob.bids[0].amount:,.4f}")
 
@@ -49,9 +51,9 @@ async def bybit_async_example() -> None:
     async with Bybit() as ex:
         # Fetch candles and trades concurrently
         ticker, candles, trades = await asyncio.gather(
-            ex.fetch_ticker("BTCUSDT"),
-            ex.fetch_candles("BTCUSDT", "1h", limit=5),
-            ex.fetch_trades("BTCUSDT", limit=5),
+            ex.fetch_ticker("BTC/USDT"),
+            ex.fetch_candles("BTC/USDT", "1h", limit=5),
+            ex.fetch_trades("BTC/USDT", limit=5),
         )
 
         print(f"BTC/USDT: ${ticker.last:,.2f}")
@@ -66,15 +68,15 @@ async def bybit_async_example() -> None:
 
 
 async def okx_async_example() -> None:
-    """OKX async with demo mode (testnet)."""
-    print("\n=== OKX (async, demo mode) ===")
+    """OKX async with sandbox mode (demo trading)."""
+    print("\n=== OKX (async, sandbox mode) ===")
 
-    # OKX demo mode uses the same URL but sets a header flag
-    async with OKX(demo=True) as ex:
-        ticker = await ex.fetch_ticker("BTC-USDT")
-        print(f"BTC-USDT (demo): ${ticker.last:,.2f}")
+    # OKX sandbox mode uses the same URL but sets a header flag
+    async with OKX(sandbox=True) as ex:
+        ticker = await ex.fetch_ticker("BTC/USDT")
+        print(f"BTC/USDT (sandbox): ${ticker.last:,.2f}")
 
-        ob = await ex.fetch_order_book("BTC-USDT", limit=5)
+        ob = await ex.fetch_order_book("BTC/USDT", limit=5)
         print(f"  Best Bid: ${ob.bids[0].price:,.2f}")
         print(f"  Best Ask: ${ob.asks[0].price:,.2f}")
 

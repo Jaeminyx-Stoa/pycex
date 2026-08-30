@@ -1,7 +1,9 @@
 # Exchanges
 
 All exchange classes implement the `BaseExchange` interface. You can swap
-exchanges without changing your application logic.
+exchanges without changing your application logic. Symbols are always the
+canonical `BASE/QUOTE` notation (e.g. `BTC/USDT`) — each adapter converts it
+to that exchange's own native notation internally before calling the API.
 
 ## Binance
 
@@ -10,15 +12,15 @@ from pycex import Binance
 
 # Public data (no auth)
 with Binance() as ex:
-    ticker = ex.fetch_ticker_sync("BTCUSDT")
-    ob = ex.fetch_order_book_sync("BTCUSDT", limit=10)
+    ticker = ex.fetch_ticker_sync("BTC/USDT")
+    ob = ex.fetch_order_book_sync("BTC/USDT", limit=10)
     print(f"BTC: ${ticker.last:,.2f}")
 
 # With authentication
 with Binance(api_key="KEY", secret="SECRET") as ex:
     balance = ex.fetch_balance_sync()
-    order = ex.create_order_sync("BTCUSDT", "buy", "limit", 0.001, 50000.0)
-    canceled = ex.cancel_order_sync(order.id, "BTCUSDT")
+    order = ex.create_order_sync("BTC/USDT", "buy", "limit", 0.001, 50000.0)
+    canceled = ex.cancel_order_sync(order.id, "BTC/USDT")
 ```
 
 ### Binance Constructor
@@ -28,7 +30,9 @@ Binance(
     api_key: str = "",
     secret: str = "",
     *,
-    testnet: bool = False,
+    sandbox: bool = False,
+    market_type: MarketType = "spot",
+    testnet: bool | None = None,  # deprecated, use sandbox=
     timeout: float = 30.0,
 )
 ```
@@ -37,7 +41,9 @@ Binance(
 |-----------|------|---------|-------------|
 | `api_key` | `str` | `""` | Binance API key |
 | `secret` | `str` | `""` | Binance API secret |
-| `testnet` | `bool` | `False` | Use testnet (`testnet.binance.vision`) |
+| `sandbox` | `bool` | `False` | Use testnet (`testnet.binance.vision`) |
+| `market_type` | `"spot" \| "linear"` | `"spot"` | Product type |
+| `testnet` | `bool \| None` | `None` | Deprecated alias for `sandbox` |
 | `timeout` | `float` | `30.0` | HTTP request timeout in seconds |
 
 ### Binance Testnet
@@ -45,8 +51,8 @@ Binance(
 ```python
 from pycex import Binance
 
-with Binance(api_key="TESTNET_KEY", secret="TESTNET_SECRET", testnet=True) as ex:
-    ticker = ex.fetch_ticker_sync("BTCUSDT")
+with Binance(api_key="TESTNET_KEY", secret="TESTNET_SECRET", sandbox=True) as ex:
+    ticker = ex.fetch_ticker_sync("BTC/USDT")
     print(f"Testnet BTC: ${ticker.last:,.2f}")
 
     balance = ex.fetch_balance_sync()
@@ -57,21 +63,22 @@ with Binance(api_key="TESTNET_KEY", secret="TESTNET_SECRET", testnet=True) as ex
 
 ## Bybit
 
-Bybit uses the V5 API. Symbol format is the same as Binance (`BTCUSDT`).
+Bybit uses the V5 API. Its native symbol format is the same as Binance
+(`BTCUSDT`), but callers always pass the canonical `BTC/USDT` form.
 
 ```python
 from pycex import Bybit
 
 # Public data
 with Bybit() as ex:
-    ticker = ex.fetch_ticker_sync("BTCUSDT")
-    ob = ex.fetch_order_book_sync("BTCUSDT", limit=10)
+    ticker = ex.fetch_ticker_sync("BTC/USDT")
+    ob = ex.fetch_order_book_sync("BTC/USDT", limit=10)
     print(f"BTC: ${ticker.last:,.2f}")
 
 # With authentication
 with Bybit(api_key="KEY", secret="SECRET") as ex:
     balance = ex.fetch_balance_sync()
-    order = ex.create_order_sync("BTCUSDT", "buy", "limit", 0.001, 50000.0)
+    order = ex.create_order_sync("BTC/USDT", "buy", "limit", 0.001, 50000.0)
 ```
 
 ### Bybit Constructor
@@ -81,9 +88,11 @@ Bybit(
     api_key: str = "",
     secret: str = "",
     *,
-    testnet: bool = False,
+    sandbox: bool = False,
+    market_type: MarketType = "spot",
+    testnet: bool | None = None,  # deprecated, use sandbox=
     timeout: float = 30.0,
-    category: str = "spot",
+    category: str | None = None,
 )
 ```
 
@@ -91,9 +100,11 @@ Bybit(
 |-----------|------|---------|-------------|
 | `api_key` | `str` | `""` | Bybit API key |
 | `secret` | `str` | `""` | Bybit API secret |
-| `testnet` | `bool` | `False` | Use testnet (`api-testnet.bybit.com`) |
+| `sandbox` | `bool` | `False` | Use testnet (`api-testnet.bybit.com`) |
+| `market_type` | `"spot" \| "linear"` | `"spot"` | `"linear"` maps `category` to `"linear"` unless `category=` is given explicitly |
+| `testnet` | `bool \| None` | `None` | Deprecated alias for `sandbox` |
 | `timeout` | `float` | `30.0` | HTTP request timeout in seconds |
-| `category` | `str` | `"spot"` | Product category (`spot`, `linear`, `inverse`) |
+| `category` | `str \| None` | `None` | Product category (`spot`, `linear`, `inverse`); overrides `market_type` when set |
 
 ### Bybit Async Example
 
@@ -103,9 +114,9 @@ from pycex import Bybit
 
 async def main():
     async with Bybit() as ex:
-        ticker = await ex.fetch_ticker("BTCUSDT")
-        candles = await ex.fetch_candles("BTCUSDT", "1h", limit=10)
-        trades = await ex.fetch_trades("BTCUSDT", limit=5)
+        ticker = await ex.fetch_ticker("BTC/USDT")
+        candles = await ex.fetch_candles("BTC/USDT", "1h", limit=10)
+        trades = await ex.fetch_trades("BTC/USDT", limit=5)
 
         print(f"BTC: ${ticker.last:,.2f}")
         for c in candles[:3]:
@@ -118,21 +129,22 @@ asyncio.run(main())
 
 ## OKX
 
-OKX uses the V5 API. Symbol format uses dashes: `BTC-USDT`.
+OKX uses the V5 API. Its native symbol format uses dashes (`BTC-USDT`), but
+callers always pass the canonical `BTC/USDT` form.
 
 ```python
 from pycex import OKX
 
 # Public data
 with OKX() as ex:
-    ticker = ex.fetch_ticker_sync("BTC-USDT")
-    ob = ex.fetch_order_book_sync("BTC-USDT", limit=10)
+    ticker = ex.fetch_ticker_sync("BTC/USDT")
+    ob = ex.fetch_order_book_sync("BTC/USDT", limit=10)
     print(f"BTC: ${ticker.last:,.2f}")
 
 # With authentication (OKX requires passphrase)
 with OKX(api_key="KEY", secret="SECRET", passphrase="PASS") as ex:
     balance = ex.fetch_balance_sync()
-    order = ex.create_order_sync("BTC-USDT", "buy", "limit", 0.001, 50000.0)
+    order = ex.create_order_sync("BTC/USDT", "buy", "limit", 0.001, 50000.0)
 ```
 
 ### OKX Constructor
@@ -143,7 +155,9 @@ OKX(
     secret: str = "",
     passphrase: str = "",
     *,
-    demo: bool = False,
+    sandbox: bool = False,
+    market_type: MarketType = "spot",
+    demo: bool | None = None,  # deprecated, use sandbox=
     timeout: float = 30.0,
 )
 ```
@@ -153,7 +167,9 @@ OKX(
 | `api_key` | `str` | `""` | OKX API key |
 | `secret` | `str` | `""` | OKX API secret |
 | `passphrase` | `str` | `""` | OKX API passphrase |
-| `demo` | `bool` | `False` | Use demo trading mode |
+| `sandbox` | `bool` | `False` | Use demo trading mode |
+| `market_type` | `"spot" \| "linear"` | `"spot"` | Product type |
+| `demo` | `bool \| None` | `None` | Deprecated alias for `sandbox` |
 | `timeout` | `float` | `30.0` | HTTP request timeout in seconds |
 
 ### OKX Demo Trading
@@ -162,8 +178,8 @@ OKX(
 from pycex import OKX
 
 # Demo mode uses a header flag, same API endpoint
-with OKX(api_key="KEY", secret="SECRET", passphrase="PASS", demo=True) as ex:
-    ticker = ex.fetch_ticker_sync("BTC-USDT")
+with OKX(api_key="KEY", secret="SECRET", passphrase="PASS", sandbox=True) as ex:
+    ticker = ex.fetch_ticker_sync("BTC/USDT")
     print(f"Demo BTC: ${ticker.last:,.2f}")
 
     balance = ex.fetch_balance_sync()
@@ -179,14 +195,14 @@ All exchanges implement these methods:
 
 ```python
 # Async
-ticker = await ex.fetch_ticker("BTCUSDT")
-ob = await ex.fetch_order_book("BTCUSDT", limit=20)
-candles = await ex.fetch_candles("BTCUSDT", "1h", limit=100)
-trades = await ex.fetch_trades("BTCUSDT", limit=100)
+ticker = await ex.fetch_ticker("BTC/USDT")
+ob = await ex.fetch_order_book("BTC/USDT", limit=20)
+candles = await ex.fetch_candles("BTC/USDT", "1h", limit=100)
+trades = await ex.fetch_trades("BTC/USDT", limit=100)
 
 # Sync
-ticker = ex.fetch_ticker_sync("BTCUSDT")
-ob = ex.fetch_order_book_sync("BTCUSDT", limit=20)
+ticker = ex.fetch_ticker_sync("BTC/USDT")
+ob = ex.fetch_order_book_sync("BTC/USDT", limit=20)
 ```
 
 ### Account (auth required)
@@ -203,14 +219,14 @@ balance = ex.fetch_balance_sync()
 
 ```python
 # Async
-order = await ex.create_order("BTCUSDT", "buy", "limit", 0.001, 50000.0)
-canceled = await ex.cancel_order(order.id, "BTCUSDT")
-status = await ex.fetch_order(order.id, "BTCUSDT")
-open_orders = await ex.fetch_open_orders("BTCUSDT")
+order = await ex.create_order("BTC/USDT", "buy", "limit", 0.001, 50000.0)
+canceled = await ex.cancel_order(order.id, "BTC/USDT")
+status = await ex.fetch_order(order.id, "BTC/USDT")
+open_orders = await ex.fetch_open_orders("BTC/USDT")
 
 # Sync
-order = ex.create_order_sync("BTCUSDT", "buy", "limit", 0.001, 50000.0)
-canceled = ex.cancel_order_sync(order.id, "BTCUSDT")
+order = ex.create_order_sync("BTC/USDT", "buy", "limit", 0.001, 50000.0)
+canceled = ex.cancel_order_sync(order.id, "BTC/USDT")
 ```
 
 ### Timeframes
@@ -221,7 +237,7 @@ Supported timeframes for candles: `1m`, `5m`, `15m`, `1h`, `4h`, `1d`, `1w`
 from pycex import Binance
 
 with Binance() as ex:
-    hourly = ex.fetch_ticker_sync("BTCUSDT")
+    hourly = ex.fetch_ticker_sync("BTC/USDT")
     # Use with fetch_candles
-    # candles = await ex.fetch_candles("BTCUSDT", "4h", limit=50)
+    # candles = await ex.fetch_candles("BTC/USDT", "4h", limit=50)
 ```

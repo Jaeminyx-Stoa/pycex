@@ -2,6 +2,8 @@
 
 All API responses are parsed into typed Pydantic models. Every model that
 wraps an exchange response includes a `.raw` field with the original data.
+Every model's `symbol` field is the canonical `BASE/QUOTE` symbol you passed
+in (e.g. `BTC/USDT`), not the exchange's native notation.
 
 ## Ticker
 
@@ -11,7 +13,7 @@ Current price and 24-hour statistics for a trading pair.
 from pycex import Binance
 
 with Binance() as ex:
-    ticker = ex.fetch_ticker_sync("BTCUSDT")
+    ticker = ex.fetch_ticker_sync("BTC/USDT")
     print(f"Symbol      : {ticker.symbol}")
     print(f"Last price  : {ticker.last}")
     print(f"Bid         : {ticker.bid}")
@@ -27,7 +29,7 @@ with Binance() as ex:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `symbol` | `str` | Trading pair (e.g., `BTCUSDT`) |
+| `symbol` | `str` | Canonical trading pair (e.g., `BTC/USDT`) |
 | `last` | `float` | Last traded price |
 | `bid` | `float` | Best bid price |
 | `ask` | `float` | Best ask price |
@@ -44,7 +46,7 @@ with Binance() as ex:
 from pycex import Binance
 
 with Binance() as ex:
-    ticker = ex.fetch_ticker_sync("BTCUSDT")
+    ticker = ex.fetch_ticker_sync("BTC/USDT")
     # Access Binance-specific fields via .raw
     print(ticker.raw["weightedAvgPrice"])
     print(ticker.raw["priceChangePercent"])
@@ -58,7 +60,7 @@ Bid and ask price levels for a trading pair.
 from pycex import Binance
 
 with Binance() as ex:
-    ob = ex.fetch_order_book_sync("ETHUSDT", limit=10)
+    ob = ex.fetch_order_book_sync("ETH/USDT", limit=10)
     print(f"Symbol: {ob.symbol}")
 
     print("Top 5 asks:")
@@ -74,7 +76,7 @@ with Binance() as ex:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `symbol` | `str` | Trading pair |
+| `symbol` | `str` | Canonical trading pair |
 | `bids` | `list[OrderBookEntry]` | Buy orders (highest first) |
 | `asks` | `list[OrderBookEntry]` | Sell orders (lowest first) |
 | `timestamp` | `int` | Unix timestamp (ms) |
@@ -93,7 +95,7 @@ with Binance() as ex:
 from pycex import Binance
 
 with Binance() as ex:
-    ob = ex.fetch_order_book_sync("BTCUSDT", limit=5)
+    ob = ex.fetch_order_book_sync("BTC/USDT", limit=5)
     spread = ob.asks[0].price - ob.bids[0].price
     spread_pct = spread / ob.bids[0].price * 100
     print(f"Spread: ${spread:,.2f} ({spread_pct:.4f}%)")
@@ -167,9 +169,9 @@ Represents a placed, filled, or canceled order.
 ```python
 from pycex import Binance
 
-with Binance(api_key="KEY", secret="SECRET", testnet=True) as ex:
+with Binance(api_key="KEY", secret="SECRET", sandbox=True) as ex:
     # Place a limit buy order
-    order = ex.create_order_sync("BTCUSDT", "buy", "limit", amount=0.001, price=50000.0)
+    order = ex.create_order_sync("BTC/USDT", "buy", "limit", amount=0.001, price=50000.0)
     print(f"Order ID : {order.id}")
     print(f"Symbol   : {order.symbol}")
     print(f"Side     : {order.side}")
@@ -180,7 +182,7 @@ with Binance(api_key="KEY", secret="SECRET", testnet=True) as ex:
     print(f"Status   : {order.status}")
 
     # Cancel it
-    canceled = ex.cancel_order_sync(order.id, "BTCUSDT")
+    canceled = ex.cancel_order_sync(order.id, "BTC/USDT")
     print(f"Canceled : {canceled.id}")
 ```
 
@@ -189,7 +191,7 @@ with Binance(api_key="KEY", secret="SECRET", testnet=True) as ex:
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | `str` | Exchange order ID |
-| `symbol` | `str` | Trading pair |
+| `symbol` | `str` | Canonical trading pair |
 | `side` | `str` | `"buy"` or `"sell"` |
 | `type` | `str` | `"limit"` or `"market"` |
 | `amount` | `float` | Order quantity |
@@ -204,9 +206,9 @@ with Binance(api_key="KEY", secret="SECRET", testnet=True) as ex:
 ```python
 from pycex import Binance
 
-with Binance(api_key="KEY", secret="SECRET", testnet=True) as ex:
+with Binance(api_key="KEY", secret="SECRET", sandbox=True) as ex:
     # Market buy (no price needed)
-    order = ex.create_order_sync("BTCUSDT", "buy", "market", amount=0.001)
+    order = ex.create_order_sync("BTC/USDT", "buy", "market", amount=0.001)
     print(f"Market buy: {order.id}, filled={order.filled}")
 ```
 
@@ -220,7 +222,7 @@ from pycex import Binance
 
 async def main():
     async with Binance() as ex:
-        candles = await ex.fetch_candles("BTCUSDT", "1h", limit=5)
+        candles = await ex.fetch_candles("BTC/USDT", "1h", limit=5)
         for c in candles:
             print(f"  O={c.open:,.2f} H={c.high:,.2f} L={c.low:,.2f} C={c.close:,.2f} V={c.volume:,.2f}")
 
@@ -246,7 +248,7 @@ from pycex import Bybit
 
 async def main():
     async with Bybit() as ex:
-        candles = await ex.fetch_candles("BTCUSDT", "1d", limit=30)
+        candles = await ex.fetch_candles("BTC/USDT", "1d", limit=30)
 
         highs = [c.high for c in candles]
         lows = [c.low for c in candles]
@@ -269,7 +271,7 @@ from pycex import Binance
 
 async def main():
     async with Binance() as ex:
-        trades = await ex.fetch_trades("BTCUSDT", limit=10)
+        trades = await ex.fetch_trades("BTC/USDT", limit=10)
         for t in trades:
             print(f"  {t.side:4s} {t.amount:,.6f} BTC @ ${t.price:,.2f}")
 
@@ -281,7 +283,7 @@ asyncio.run(main())
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | `str` | Trade ID |
-| `symbol` | `str` | Trading pair |
+| `symbol` | `str` | Canonical trading pair |
 | `side` | `str` | `"buy"` or `"sell"` |
 | `price` | `float` | Execution price |
 | `amount` | `float` | Execution quantity |
@@ -295,7 +297,7 @@ from pycex import Binance
 
 async def main():
     async with Binance() as ex:
-        trades = await ex.fetch_trades("BTCUSDT", limit=100)
+        trades = await ex.fetch_trades("BTC/USDT", limit=100)
 
         buy_vol = sum(t.amount for t in trades if t.side == "buy")
         sell_vol = sum(t.amount for t in trades if t.side == "sell")

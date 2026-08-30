@@ -18,8 +18,8 @@ class TestBinanceParsers:
             "quoteVolume": "61728000.00",
             "closeTime": 1700000000000,
         }
-        t = _parse_ticker(data)
-        assert t.symbol == "BTCUSDT"
+        t = _parse_ticker("BTC/USDT", data)
+        assert t.symbol == "BTC/USDT"
         assert t.last == 50000.0
         assert t.volume == 1234.56
 
@@ -53,8 +53,9 @@ class TestBinanceParsers:
             "status": "PARTIALLY_FILLED",
             "transactTime": 1700000000000,
         }
-        o = _parse_order(data)
+        o = _parse_order("BTC/USDT", data)
         assert o.id == "12345"
+        assert o.symbol == "BTC/USDT"
         assert o.side == "buy"
         assert o.filled == 0.05
 
@@ -71,8 +72,8 @@ class TestBybitParsers:
             "volume24h": "1234.56",
             "turnover24h": "61728000",
         }
-        t = bybit_parse_ticker(data)
-        assert t.symbol == "BTCUSDT"
+        t = bybit_parse_ticker("BTC/USDT", data)
+        assert t.symbol == "BTC/USDT"
         assert t.last == 50000.0
 
 
@@ -89,6 +90,6 @@ class TestOKXParsers:
             "volCcy24h": "61728000",
             "ts": "1700000000000",
         }
-        t = okx_parse_ticker(data)
-        assert t.symbol == "BTC-USDT"
+        t = okx_parse_ticker("BTC/USDT", data)
+        assert t.symbol == "BTC/USDT"
         assert t.last == 50000.0

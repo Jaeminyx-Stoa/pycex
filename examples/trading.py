@@ -20,7 +20,7 @@ if not api_key or not secret:
     print("Get testnet credentials at: https://testnet.binance.vision/")
     raise SystemExit(1)
 
-with Binance(api_key=api_key, secret=secret, testnet=True) as ex:
+with Binance(api_key=api_key, secret=secret, sandbox=True) as ex:
     # Check current balance
     balance = ex.fetch_balance_sync()
     print("Current balance:")
@@ -33,13 +33,13 @@ with Binance(api_key=api_key, secret=secret, testnet=True) as ex:
         print(f"\nUSDT available: {usdt.free:,.2f}")
 
     # Get current BTC price
-    ticker = ex.fetch_ticker_sync("BTCUSDT")
+    ticker = ex.fetch_ticker_sync("BTC/USDT")
     print(f"\nBTC price: ${ticker.last:,.2f}")
 
     # Place a limit buy order well below market price (so it won't fill)
     buy_price = round(ticker.last * 0.80, 2)  # 20% below market
     print(f"\nPlacing limit buy: 0.001 BTC @ ${buy_price:,.2f}")
-    buy_order = ex.create_order_sync("BTCUSDT", "buy", "limit", amount=0.001, price=buy_price)
+    buy_order = ex.create_order_sync("BTC/USDT", "buy", "limit", amount=0.001, price=buy_price)
     print(f"  Order ID: {buy_order.id}")
     print(f"  Status  : {buy_order.status}")
     print(f"  Side    : {buy_order.side}")
@@ -49,18 +49,18 @@ with Binance(api_key=api_key, secret=secret, testnet=True) as ex:
     # Place a limit sell order well above market price
     sell_price = round(ticker.last * 1.20, 2)  # 20% above market
     print(f"\nPlacing limit sell: 0.001 BTC @ ${sell_price:,.2f}")
-    sell_order = ex.create_order_sync("BTCUSDT", "sell", "limit", amount=0.001, price=sell_price)
+    sell_order = ex.create_order_sync("BTC/USDT", "sell", "limit", amount=0.001, price=sell_price)
     print(f"  Order ID: {sell_order.id}")
     print(f"  Status  : {sell_order.status}")
 
     # Cancel the buy order
     print(f"\nCanceling buy order {buy_order.id}...")
-    canceled = ex.cancel_order_sync(buy_order.id, "BTCUSDT")
+    canceled = ex.cancel_order_sync(buy_order.id, "BTC/USDT")
     print(f"  Canceled: {canceled.id}")
 
     # Cancel the sell order
     print(f"Canceling sell order {sell_order.id}...")
-    canceled = ex.cancel_order_sync(sell_order.id, "BTCUSDT")
+    canceled = ex.cancel_order_sync(sell_order.id, "BTC/USDT")
     print(f"  Canceled: {canceled.id}")
 
     print("\nDone! All test orders placed and canceled.")
