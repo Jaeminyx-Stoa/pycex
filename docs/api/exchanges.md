@@ -645,6 +645,52 @@ Korbit(
   cross-checking identical epoch values against Bithumb's fixture (see
   `tests/fixtures/NOTES.md`).
 
+## Daily-Bar Boundaries and Live-Smoke Notes (Task 13, 2026-08-30)
+
+`fetch_candles(symbol, "1d", ...)`'s bar-open timestamp lands on a different
+wall-clock boundary depending on the venue. All nine exchange/market-type
+surfaces below were exercised live (`pytest -m live tests/live`) against
+real public endpoints from `mwork2`; `tests/live/test_smoke.py` asserts the
+boundary in the `expected_offset` column programmatically (`c.timestamp %
+86_400_000 == expected_offset`).
+
+| Exchange | Market type(s) | Daily-bar boundary | `expected_offset` (ms) |
+|---|---|---|---|
+| Upbit | spot | 00:00 UTC (09:00 KST) | `0` |
+| Bithumb | spot | 00:00 KST (15:00 UTC previous day) | `54_000_000` |
+| Korbit | spot | 00:00 KST (15:00 UTC previous day) | `54_000_000` |
+| Binance | spot, linear | 00:00 UTC | `0` |
+| OKX | spot, linear | 00:00 UTC (**only** with `bar=1Dutc`; the bare `bar=1D` this adapter used before Task 13 aligns to Hong Kong time, UTC+8) | `0` |
+| Bitget | spot, linear | 00:00 UTC (**only** with `granularity=1Dutc`; the bare `granularity=1day`/`1Dutc` for mix already matched, but spot used `1day` before Task 13, same UTC+8 bug as OKX) | `0` |
+
+🚨 **Task 13 defect found live**: OKX (`_TIMEFRAME_MAP["1d"]`, both spot and
+linear share one map) and Bitget spot (`_TIMEFRAME_MAP["1d"]`, mix already
+used the correct `"1Dutc"`) both requested the bare `"1D"`/`"1day"`
+granularity, which both exchanges align to **Hong Kong time (UTC+8)**, not
+UTC — live-diffing `bar=1D` vs `bar=1Dutc` on the same OKX instrument showed
+timestamps exactly `28_800_000`ms (8h) apart, and the same diff reproduced
+on Bitget spot's `granularity=1day` vs `1Dutc`. Fixed by mapping `"1d"` (and
+`"1w"`) to the `"...utc"`-suffixed granularity in both adapters
+(`src/pycex/exchanges/okx.py`, `src/pycex/exchanges/bitget.py`); see the
+`_TIMEFRAME_MAP` docstring comments in each file and the mutation-verified
+unit tests `test_fetch_candles_page_daily_uses_utc_suffixed_bar` (OKX) /
+`test_fetch_candles_page_spot_daily_uses_utc_suffixed_granularity` (Bitget).
+
+Other live-observed behavior, no code changes needed:
+
+- All nine surfaces' `fetch_order_book` returned a non-empty book (≥1 bid,
+  ≥1 ask) for `BTC/KRW`/`BTC/USDT`(`:USDT`) — no venue returned an empty book
+  for this liquid pair at test time.
+- All nine surfaces' `fetch_trades(limit=5)` returned exactly 5 recent
+  trades; none of the six global/linear surfaces or three KRW spot surfaces
+  hit a rate limit during the smoke run (single request per surface, no
+  retries observed).
+- The pagination path (`fetch_candles` with `since=`/`until=` spanning 10
+  days) was verified on one venue per family — `binance` (`linear`),
+  `upbit` (`spot`), `korbit` (`spot`) — returning 9–11 strictly ascending,
+  duplicate-free daily bars in each case (`BaseExchange.fetch_candles`'s
+  cursor/dedup logic, unchanged by this task).
+
 ## Unified Interface (BaseExchange)
 
 All exchanges implement these methods:
