@@ -196,6 +196,7 @@ OKX(
     *,
     sandbox: bool = False,
     market_type: MarketType = "spot",
+    td_mode: Literal["cross", "isolated"] = "cross",
     demo: bool | None = None,  # deprecated, use sandbox=
     timeout: float = 30.0,
 )
@@ -207,7 +208,8 @@ OKX(
 | `secret` | `str` | `""` | OKX API secret |
 | `passphrase` | `str` | `""` | OKX API passphrase |
 | `sandbox` | `bool` | `False` | Use demo trading mode |
-| `market_type` | `"spot" \| "linear"` | `"spot"` | Product type |
+| `market_type` | `"spot" \| "linear"` | `"spot"` | Product type (`"linear"` = USDT-margined perpetual SWAP) |
+| `td_mode` | `"cross" \| "isolated"` | `"cross"` | Margin mode sent as `tdMode` on SWAP orders (ignored on spot, which always uses `"cash"`) |
 | `demo` | `bool \| None` | `None` | Deprecated alias for `sandbox` |
 | `timeout` | `float` | `30.0` | HTTP request timeout in seconds |
 
@@ -225,6 +227,59 @@ with OKX(api_key="KEY", secret="SECRET", passphrase="PASS", sandbox=True) as ex:
     for asset in balance.assets:
         print(f"  {asset.asset}: {asset.free}")
 ```
+
+### OKX USDT-Margined Perpetual SWAP (`market_type="linear"`)
+
+Both market types hit the same host (`www.okx.com`); only `instType`
+(`SPOT`/`SWAP`) and a few SWAP-only endpoints differ. Linear symbols use
+`BASE/QUOTE:QUOTE` notation, e.g. `BTC/USDT:USDT` <-> native `BTC-USDT-SWAP`.
+
+```python
+from pycex import OKX
+
+with OKX(api_key="KEY", secret="SECRET", passphrase="PASS", market_type="linear") as ex:
+    markets = ex.fetch_markets_sync()  # populates the symbol cache used by from_native
+    funding = ex.fetch_funding_rate_sync("BTC/USDT:USDT")
+    print(f"funding rate: {funding.rate:.6f} (next {funding.next_funding_time})")
+
+    positions = ex.fetch_positions_sync()
+    for p in positions:
+        print(f"{p.symbol}: {p.side} {p.amount} @ {p.entry_price}, uPnL={p.unrealized_pnl}")
+
+    order = ex.create_order_sync("BTC/USDT:USDT", "buy", "market", 1)  # `1` = 1 contract, not 1 BTC
+    trades = ex.fetch_my_trades_sync("BTC/USDT:USDT")
+```
+
+- `fetch_positions`/`fetch_funding_rate` raise `NotSupportedError` on a
+  `"spot"` instance (the shared `BaseExchange` default) — they only work with
+  `market_type="linear"`.
+- **`sz` is in contracts, not base-asset quantity**, for SWAP instruments —
+  see `ctVal`/`ctValCcy` on the `Market` returned by `fetch_markets`. This
+  adapter does not convert amount<->contracts in this phase; callers pass
+  the contract count directly to `create_order`/`cancel_order` on SWAP
+  symbols.
+- `create_order` never sends `posSide`, i.e. it assumes the SWAP account is
+  in **one-way mode** (OKX's default). A **hedge-mode** account requires
+  `posSide="long"`/`"short"` on every order; without it OKX rejects the
+  order, surfaced as whatever `ExchangeError` it returns (the exact error
+  code for this case was not confirmed against docs in this pass).
+- **Inverse (coin-margined) perpetuals are out of scope** — only
+  USDT-settled linear (`settle == quote`) is supported. `to_native` raises
+  `SymbolNotFoundError` for a canonical symbol like `BTC/USD:BTC`, and
+  `from_native` raises it for a native `*-USD-SWAP` symbol.
+- `fetch_positions` maps OKX's `posSide`: `"net"` mode uses the sign of
+  `pos` to decide long/short; explicit hedge-mode `"long"`/`"short"` rows are
+  used as-is. Flat rows (`pos == 0`) are excluded. `liqPx`/`avgPx`/`lever`
+  of `"0"`/empty map to `None`, not `0.0`.
+- `fetch_my_trades` calls `GET /api/v5/trade/fills` (last 3 days only). That
+  endpoint's `after`/`before` params page over a `billId`, not a timestamp,
+  so `since=` is applied client-side after parsing rather than as a
+  server-side range filter.
+- `fetch_candles`/`_fetch_candles_page` automatically retries against
+  `GET /api/v5/market/history-candles` with the same params whenever the
+  regular `/api/v5/market/candles` endpoint returns an empty `data` array —
+  that endpoint only serves a recent rolling window, and empty is how it
+  signals "ask history-candles instead" rather than returning an error.
 
 ## Upbit
 

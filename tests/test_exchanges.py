@@ -239,6 +239,9 @@ class TestOKXCandleCursorSemantics:
 
     @pytest.mark.asyncio
     async def test_since_sends_before_only(self, httpx_mock: HTTPXMock) -> None:
+        # An empty `data` array triggers the history-candles fallback (task 9),
+        # so a second (also empty) response must be queued for that retry.
+        httpx_mock.add_response(json={"code": "0", "msg": "", "data": []})
         httpx_mock.add_response(json={"code": "0", "msg": "", "data": []})
         async with OKX(api_key="k", secret="s", passphrase="p") as ex:
             await ex._fetch_candles_page("BTC-USDT", "1h", since=1_000, until=5_000, limit=100)
@@ -248,6 +251,9 @@ class TestOKXCandleCursorSemantics:
 
     @pytest.mark.asyncio
     async def test_until_only_sends_after_only(self, httpx_mock: HTTPXMock) -> None:
+        # An empty `data` array triggers the history-candles fallback (task 9),
+        # so a second (also empty) response must be queued for that retry.
+        httpx_mock.add_response(json={"code": "0", "msg": "", "data": []})
         httpx_mock.add_response(json={"code": "0", "msg": "", "data": []})
         async with OKX(api_key="k", secret="s", passphrase="p") as ex:
             await ex._fetch_candles_page("BTC-USDT", "1h", since=None, until=5_000, limit=100)
