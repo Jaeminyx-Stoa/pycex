@@ -47,7 +47,7 @@ dev = [
     "mypy>=1.10",
 ]
 mcp = [
-    "mcp[cli]>=1.0.0",
+    "mcp[cli]>=1.0.0,<2",
 ]
 docs = [
     "mkdocs-material>=9.5",
