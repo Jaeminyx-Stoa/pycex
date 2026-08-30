@@ -10,6 +10,10 @@ import httpx
 
 OUT = Path(__file__).resolve().parent.parent / "tests" / "fixtures"
 
+# Exchange-info responses (e.g. Binance exchangeInfo) list every tradable symbol —
+# keep only these so fixtures stay small. BTCUSDT must always be present.
+SYMBOLS_KEEP = {"BTCUSDT", "ETHUSDT", "SOLUSDT"}
+
 # (exchange, name, url, params, keep_first_n)
 TARGETS = [
     ("upbit", "markets", "https://api.upbit.com/v1/market/all", {"is_details": "true"}, 3),
@@ -50,6 +54,11 @@ def main() -> None:
                 data = data[:n]
             if n and isinstance(data, dict) and isinstance(data.get("data"), list):
                 data["data"] = data["data"][:n]
+            # Full-universe exchange-info responses (Binance exchangeInfo "symbols")
+            # aren't covered by keep_first_n above — trim them to a fixed symbol set
+            # regardless of n so they don't balloon fixture size.
+            if isinstance(data, dict) and isinstance(data.get("symbols"), list):
+                data["symbols"] = [s for s in data["symbols"] if isinstance(s, dict) and s.get("symbol") in SYMBOLS_KEEP]
             p = OUT / ex / f"{name}.json"
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(json.dumps(data, indent=2, ensure_ascii=False))
