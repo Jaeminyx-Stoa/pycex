@@ -3,10 +3,37 @@
 ``market_type="linear"`` switches the base URL to ``fapi.binance.com`` (or its
 testnet) and every endpoint to its ``/fapi/v1``|``/fapi/v2`` counterpart via the
 ``_PATHS`` table (see :meth:`Binance._p`), so no per-method ``if market_type``
-branching is needed. Confirmed against
-developers.binance.com/docs/derivatives/usds-margined-futures/{market-data,trade}/rest-api
-and developers.binance.com/docs/binance-spot-api-docs/rest-api/general-endpoints
-(2026-08-30).
+branching is needed.
+
+Doc verification (2026-08-30) — not a blanket "confirmed", itemized:
+- Live-fetched and confirmed: ``POST /fapi/v1/order`` params
+  (``symbol/side/type/quantity/price/positionSide/timeInForce``) and
+  ``GET /fapi/v1/userTrades`` response fields (``id, orderId, price, qty,
+  commission, commissionAsset, time, side`` — futures trades carry an explicit
+  ``side``, unlike spot) from
+  developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api;
+  ``GET /fapi/v1/klines`` (12-column array, index 0 = open time ms),
+  ``GET /fapi/v1/premiumIndex`` (``symbol, markPrice, indexPrice,
+  lastFundingRate, nextFundingTime, interestRate, time``), and
+  ``GET /fapi/v1/exchangeInfo`` (``symbols[].{symbol,baseAsset,quoteAsset,status}``,
+  ``PRICE_FILTER.tickSize``, ``LOT_SIZE.stepSize``, ``MIN_NOTIONAL.notional``) from
+  developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api;
+  ``GET /api/v3/exchangeInfo`` ``symbols[].{symbol,baseAsset,quoteAsset,status}`` and
+  ``PRICE_FILTER.tickSize`` from
+  developers.binance.com/docs/binance-spot-api-docs/rest-api/general-endpoints
+  (``LOT_SIZE.stepSize``/``NOTIONAL.minNotional`` for spot weren't spelled out in
+  that fetch's excerpt, but are load-bearing verbatim in the recorded fixture
+  ``tests/fixtures/binance/markets_spot.json``).
+- Reviewer-verified 2026-08-30 (not independently live-fetched in this pass):
+  ``GET /fapi/v2/positionRisk`` fields (``symbol, positionAmt, entryPrice,
+  unRealizedProfit, leverage, liquidationPrice, updateTime``) and
+  ``GET /fapi/v2/balance`` fields (``asset, balance, availableBalance`` — a bare
+  list, not ``{"balances":[...]}`` like spot's ``/api/v3/account``).
+- Not documented in either fetched page and not independently reconfirmed:
+  the ``-4061`` hedge-mode error code below is long-standing, widely-documented
+  Binance Futures API behavior, not a value pulled from a docs page in this
+  session — treat it as unverified-by-fetch if it ever needs to be relied on
+  precisely (e.g. matching on the numeric code programmatically).
 
 ``create_order`` never sends ``positionSide`` — this assumes the linear account
 is in one-way mode (Binance's default). A hedge-mode account requires
@@ -373,19 +400,26 @@ def _parse_balance_linear(data: list[dict[str, Any]]) -> Balance:
     return Balance(assets=entries, raw={"balances": data})
 
 
+def _none_if_zero(v: Any) -> float | None:
+    """``0``/``"0"``/missing all mean "not meaningful" for these fields (e.g. a
+    cross-margin position reports ``liquidationPrice: "0"`` when Binance can't
+    compute one) — same treatment as ``_parse_order``'s ``price`` field."""
+    if v in (None, ""):
+        return None
+    f = float(v)
+    return f if f != 0 else None
+
+
 def _parse_position(symbol: str, d: dict[str, Any]) -> Position:
     amt = float(d.get("positionAmt", 0) or 0)
-    entry_price = d.get("entryPrice")
-    leverage = d.get("leverage")
-    liquidation_price = d.get("liquidationPrice")
     return Position(
         symbol=symbol,
         side="long" if amt > 0 else "short",
         amount=abs(amt),
-        entry_price=float(entry_price) if entry_price not in (None, "") else None,
+        entry_price=_none_if_zero(d.get("entryPrice")),
         unrealized_pnl=float(d.get("unRealizedProfit", 0) or 0),
-        leverage=float(leverage) if leverage not in (None, "") else None,
-        liquidation_price=float(liquidation_price) if liquidation_price not in (None, "") else None,
+        leverage=_none_if_zero(d.get("leverage")),
+        liquidation_price=_none_if_zero(d.get("liquidationPrice")),
         timestamp=int(d.get("updateTime", 0) or 0),
         raw=d,
     )

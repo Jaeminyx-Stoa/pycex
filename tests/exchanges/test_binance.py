@@ -210,6 +210,32 @@ async def test_fetch_positions_linear(httpx_mock: HTTPXMock) -> None:
     await ex.close()
 
 
+async def test_fetch_positions_linear_zero_liquidation_price_is_none(httpx_mock: HTTPXMock) -> None:
+    """A cross-margin position can carry `liquidationPrice: "0"` (Binance can't
+    compute one) while still being a real, non-flat position — `"0"` must map to
+    `None`, not `0.0`, same treatment as `_parse_order`'s `price` field."""
+    httpx_mock.add_response(
+        json=[
+            {
+                "symbol": "SOLUSDT",
+                "positionAmt": "10.000",
+                "entryPrice": "150.0",
+                "unRealizedProfit": "5.0",
+                "leverage": "3",
+                "liquidationPrice": "0",
+                "updateTime": 1700000000000,
+            }
+        ]
+    )
+    ex = Binance(api_key="k", secret="s", market_type="linear")
+    positions = await ex.fetch_positions()
+    assert len(positions) == 1
+    p = positions[0]
+    assert p.amount != 0
+    assert p.liquidation_price is None
+    await ex.close()
+
+
 # ── my trades ──
 
 
