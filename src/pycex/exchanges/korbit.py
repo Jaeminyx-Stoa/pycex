@@ -102,24 +102,26 @@ class Korbit(BaseExchange):
     def _headers(self) -> dict[str, str]:
         return {"X-KAPI-KEY": self._api_key}
 
-    def _signed_query_path(self, path: str, params: dict[str, Any] | None = None) -> str:
-        """Build ``path?query`` with ``timestamp``/``signature`` appended, signed over
-        the exact query string that ends up in the URL (params=None on the actual
-        request call, so httpx sends this string verbatim)."""
-        p: dict[str, Any] = dict(params or {})
-        p["timestamp"] = timestamp_ms()
-        message = urlencode(p, doseq=True)
-        p["signature"] = korbit_sign(self._secret, message)
-        return f"{path}?{urlencode(p, doseq=True)}"
-
-    def _signed_form_body(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        """Add ``timestamp``/``signature`` to a POST body dict, signed over the exact
-        string :meth:`HTTPClient.post_form` will encode from this same dict."""
+    def _sign(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Add ``timestamp``/``signature`` to ``params``, signed over the exact encoded
+        string that will be sent. Shared by ``_signed_query_path`` (GET/DELETE, where the
+        result is urlencoded straight into the request path) and ``_signed_form_body``
+        (POST, where the result is handed to :meth:`HTTPClient.post_form` — which encodes
+        it the same way), so the signed string and the wire bytes are always identical."""
         p: dict[str, Any] = dict(params or {})
         p["timestamp"] = timestamp_ms()
         message = urlencode(p, doseq=True)
         p["signature"] = korbit_sign(self._secret, message)
         return p
+
+    def _signed_query_path(self, path: str, params: dict[str, Any] | None = None) -> str:
+        """Build ``path?query`` with ``timestamp``/``signature`` appended (params=None on
+        the actual request call, so httpx sends this string verbatim)."""
+        return f"{path}?{urlencode(self._sign(params), doseq=True)}"
+
+    def _signed_form_body(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Add ``timestamp``/``signature`` to a POST body dict."""
+        return self._sign(params)
 
     # ── Market Data ──
 
@@ -130,6 +132,10 @@ class Korbit(BaseExchange):
         return _parse_ticker(symbol, arr[0])
 
     async def fetch_order_book(self, symbol: str, *, limit: int = 20) -> OrderBook:
+        # `limit` is intentionally unused: Korbit's `GET /v2/orderbook` has no depth
+        # param — it takes `level` (a price-grouping step), not a result-count limit
+        # (docs.korbit.co.kr/llms/en/rest_api/quotation.md) — so there is nothing to
+        # pass it as without changing its semantics.
         native = self.to_native(symbol)
         data = await self._http.get("/v2/orderbook", params={"symbol": native})
         d = _unwrap(data)
@@ -341,10 +347,12 @@ def _parse_ticker(symbol: str, d: dict[str, Any]) -> Ticker:
 
 
 def _parse_public_trade(symbol: str, d: dict[str, Any]) -> Trade:
+    # docs.korbit.co.kr/llms/en/rest_api/quotation.md: `isBuyerTaker=true` means the
+    # taker side of the trade was the buyer, i.e. the trade was a taker BUY.
     return Trade(
         id=str(d.get("tradeId", "")),
         symbol=symbol,
-        side="sell" if d.get("isBuyerTaker") else "buy",
+        side="buy" if d.get("isBuyerTaker") else "sell",
         price=float(d.get("price", 0) or 0),
         amount=float(d.get("qty", 0) or 0),
         timestamp=int(d.get("timestamp", 0) or 0),
@@ -352,13 +360,21 @@ def _parse_public_trade(symbol: str, d: dict[str, Any]) -> Trade:
 
 
 def _parse_order(symbol: str, d: dict[str, Any]) -> Order:
+    # A market-buy order carries `amt` (quote-currency total spent), not `qty` —
+    # `GET /v2/orders` response fields (docs.korbit.co.kr/llms/en/rest_api/trading.md).
+    # For that case `amount` below is then the quote total, consistent with
+    # `create_order`'s own echo of a market-buy's `amount` argument. Both raw fields
+    # are preserved in `raw` regardless of which one was used.
+    qty = d.get("qty")
+    amt = d.get("amt")
+    amount = float(qty) if qty else float(amt or 0)
     price = d.get("price")
     return Order(
         id=str(d.get("orderId", "")),
         symbol=symbol,
         side=str(d.get("side", "")).lower(),
         type=str(d.get("orderType", "")).lower(),
-        amount=float(d.get("qty", 0) or 0),
+        amount=amount,
         price=float(price) if price not in (None, "") else None,
         filled=float(d.get("filledQty", 0) or 0),
         status=str(d.get("status", "")),

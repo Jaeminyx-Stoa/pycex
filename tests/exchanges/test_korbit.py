@@ -17,7 +17,15 @@ from pycex.exceptions import (
     OrderNotFoundError,
     SymbolNotFoundError,
 )
-from pycex.exchanges.korbit import Korbit, _map_error, _parse_candle, _parse_market, _parse_ticker
+from pycex.exchanges.korbit import (
+    Korbit,
+    _map_error,
+    _parse_candle,
+    _parse_market,
+    _parse_order,
+    _parse_public_trade,
+    _parse_ticker,
+)
 from tests.conftest import load_fixture
 
 SECRET = "test-secret"
@@ -132,6 +140,104 @@ async def test_fetch_markets(httpx_mock: HTTPXMock) -> None:
     assert req.url.path == "/v2/currencyPairs"
     assert len(markets) == 3
     assert {m.symbol for m in markets} == {"ALGO/KRW", "ENS/KRW", "KDA/KRW"}
+    await ex.close()
+
+
+def test_parse_public_trade_isbuyertaker_true_is_buy() -> None:
+    # docs.korbit.co.kr/llms/en/rest_api/quotation.md: isBuyerTaker=true means the
+    # taker side of the trade was the buyer -> the trade prints as a taker BUY.
+    raw = {"timestamp": 1788015600000, "price": "108519000", "qty": "0.001", "isBuyerTaker": True, "tradeId": 1}
+    t = _parse_public_trade("BTC/KRW", raw)
+    assert t.side == "buy"
+
+
+def test_parse_public_trade_isbuyertaker_false_is_sell() -> None:
+    raw = {"timestamp": 1788015600000, "price": "108519000", "qty": "0.001", "isBuyerTaker": False, "tradeId": 2}
+    t = _parse_public_trade("BTC/KRW", raw)
+    assert t.side == "sell"
+
+
+async def test_fetch_trades(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        json={
+            "success": True,
+            "data": [
+                {"timestamp": 1788015600000, "price": "108519000", "qty": "0.001", "isBuyerTaker": True, "tradeId": 1},
+                {"timestamp": 1788015601000, "price": "108518000", "qty": "0.002", "isBuyerTaker": False, "tradeId": 2},
+            ],
+        }
+    )
+    ex = Korbit()
+    trades = await ex.fetch_trades("BTC/KRW", limit=50)
+    req = httpx_mock.get_request()
+    assert req.url.path == "/v2/trades"
+    assert req.url.params["symbol"] == "btc_krw" and req.url.params["limit"] == "50"
+    assert len(trades) == 2
+    assert trades[0].id == "1" and trades[0].side == "buy" and trades[0].price == 108519000.0
+    assert trades[1].id == "2" and trades[1].side == "sell" and trades[1].amount == 0.002
+    await ex.close()
+
+
+async def test_fetch_order_book(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        json={
+            "success": True,
+            "data": {
+                "timestamp": 1788015600000,
+                "bids": [{"price": "108500000", "qty": "0.5"}, {"price": "108400000", "qty": "1.0"}],
+                "asks": [{"price": "108600000", "qty": "0.3"}],
+            },
+        }
+    )
+    ex = Korbit()
+    ob = await ex.fetch_order_book("BTC/KRW")
+    req = httpx_mock.get_request()
+    assert req.url.path == "/v2/orderbook" and req.url.params["symbol"] == "btc_krw"
+    assert ob.symbol == "BTC/KRW"
+    assert ob.timestamp == 1788015600000
+    assert len(ob.bids) == 2 and ob.bids[0].price == 108500000.0 and ob.bids[0].amount == 0.5
+    assert len(ob.asks) == 1 and ob.asks[0].price == 108600000.0 and ob.asks[0].amount == 0.3
+    await ex.close()
+
+
+def test_parse_order_market_buy_amount_from_amt_when_qty_absent() -> None:
+    # A market-buy order carries `amt` (quote-currency total), not `qty` — GET /v2/orders
+    # response shape (docs.korbit.co.kr/llms/en/rest_api/trading.md).
+    raw = {
+        "orderId": 42,
+        "symbol": "btc_krw",
+        "orderType": "market",
+        "side": "buy",
+        "amt": "100000",
+        "filledQty": "0.0009",
+        "status": "filled",
+        "createdAt": 1788015600000,
+    }
+    order = _parse_order("BTC/KRW", raw)
+    assert order.amount == 100000.0
+    assert order.raw["amt"] == "100000"
+    assert order.raw.get("qty") is None
+
+
+async def test_fetch_order_market_buy_uses_amt(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        json={
+            "success": True,
+            "data": {
+                "orderId": 42,
+                "symbol": "btc_krw",
+                "orderType": "market",
+                "side": "buy",
+                "amt": "100000",
+                "filledQty": "0.0009",
+                "status": "filled",
+                "createdAt": 1788015600000,
+            },
+        }
+    )
+    ex = Korbit(api_key="k", secret=SECRET)
+    order = await ex.fetch_order("42", "BTC/KRW")
+    assert order.amount == 100000.0
     await ex.close()
 
 
