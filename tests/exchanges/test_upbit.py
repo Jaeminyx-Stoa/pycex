@@ -147,6 +147,7 @@ async def test_create_order_limit_buy(httpx_mock: HTTPXMock) -> None:
     assert body == expected_body
     _assert_bearer_query_hash(req.headers, expected_body)
     assert order.symbol == "BTC/KRW"
+    assert order.amount == 0.01 and order.price == 50_000_000
     await ex.close()
 
 
@@ -161,6 +162,7 @@ async def test_create_order_market_buy_uses_price_ord_type(httpx_mock: HTTPXMock
     assert "volume" not in body
     _assert_bearer_query_hash(req.headers, expected_body)
     assert order.symbol == "BTC/KRW"
+    assert order.amount == 100_000 and order.price is None  # echoes the request, not the response
     await ex.close()
 
 
@@ -177,6 +179,7 @@ async def test_create_order_market_sell_uses_market_ord_type(httpx_mock: HTTPXMo
     assert "price" not in body
     _assert_bearer_query_hash(req.headers, expected_body)
     assert order.symbol == "BTC/KRW"
+    assert order.amount == 0.02 and order.price is None
     await ex.close()
 
 

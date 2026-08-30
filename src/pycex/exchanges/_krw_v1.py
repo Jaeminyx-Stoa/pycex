@@ -253,7 +253,13 @@ def _parse_order(symbol: str, d: dict[str, Any]) -> Order:
     """Parse a "full" order object — the shape returned by Upbit's ``/v1/order(s)``
     and Bithumb's ``/v1/order`` and ``/v2/orders/pending``/``/v2/orders/history``
     (after Bithumb's v2 field names are normalized to v1's — see
-    ``pycex.exchanges.bithumb._normalize_order_fields``)."""
+    ``pycex.exchanges.bithumb._normalize_order_fields``).
+
+    ``side``/``type`` are mapped only when the response actually carries
+    ``side``/``ord_type`` — a sparse response (e.g. Bithumb's ``DELETE
+    /v2/order``, which returns only ``order_id``/``client_order_id``/
+    ``created_at``) yields ``side=""``/``type=""`` rather than a fabricated
+    guess."""
     ord_type = d.get("ord_type", "")
     price_raw = d.get("price")
     price = float(price_raw) if price_raw not in (None, "") and ord_type == "limit" else None
@@ -265,11 +271,13 @@ def _parse_order(symbol: str, d: dict[str, Any]) -> Order:
     else:
         amount = 0.0
     created_at = d.get("created_at")
+    side = {"bid": "buy", "ask": "sell"}.get(d.get("side", ""), "")
+    order_type_out = "" if not ord_type else ("market" if ord_type in ("price", "market") else "limit")
     return Order(
         id=str(d.get("uuid", "")),
         symbol=symbol,
-        side="buy" if d.get("side") == "bid" else "sell",
-        type="market" if ord_type in ("price", "market") else "limit",
+        side=side,
+        type=order_type_out,
         amount=amount,
         price=price,
         filled=float(d.get("executed_volume", 0) or 0),

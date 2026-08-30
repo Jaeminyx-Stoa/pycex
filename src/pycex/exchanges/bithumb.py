@@ -113,18 +113,23 @@ class Bithumb(KrwV1Mixin, BaseExchange):
         Request shape matches Upbit closely (``market``/``side``/``price``/
         ``volume``) but the order-type field is named ``order_type`` (Upbit:
         ``ord_type``), and the response only echoes ``order_id``/``market``/
-        ``side``/``order_type``/``created_at`` — not price/volume/state — so
-        the parsed ``Order``'s ``amount``/``price``/``status`` reflect only
-        what Bithumb actually returns (see ``raw`` for the full response).
+        ``side``/``order_type``/``created_at`` — not price/volume/state.
         Market buys use ``order_type="price"`` with ``amount`` as the
         **quote-currency total to spend**; market sells use
         ``order_type="market"`` with ``amount`` as the base-asset volume —
         matching every other adapter's convention.
+
+        The returned ``Order``'s ``side``/``type``/``amount``/``price`` echo
+        exactly what the caller passed in (``price`` forced to ``None`` for
+        market orders) rather than whatever Bithumb's response happens to
+        contain — see ``raw`` for the actual response.
         """
         native = self.to_native(symbol)
-        bithumb_side = "bid" if side.lower() == "buy" else "ask"
+        canonical_side = side.lower()
+        canonical_type = order_type.lower()
+        bithumb_side = "bid" if canonical_side == "buy" else "ask"
         body: dict[str, Any] = {"market": native, "side": bithumb_side}
-        if order_type.lower() == "limit":
+        if canonical_type == "limit":
             if price is None:
                 raise InvalidOrderError("limit order requires a price", exchange="bithumb")
             body["order_type"] = "limit"
@@ -137,15 +142,25 @@ class Bithumb(KrwV1Mixin, BaseExchange):
             body["order_type"] = "market"
             body["volume"] = str(amount)
         data = await self._http.post("/v2/orders", data=body, headers=self._headers(body))
-        return _parse_order(symbol, _normalize_order_fields(data))
+        parsed = _parse_order(symbol, _normalize_order_fields(data))
+        return parsed.model_copy(
+            update={
+                "side": canonical_side,
+                "type": canonical_type,
+                "amount": amount,
+                "price": price if canonical_type == "limit" else None,
+            }
+        )
 
     async def cancel_order(self, order_id: str, symbol: str) -> Order:
         """Cancel via ``DELETE /v2/order``.
 
         The response is even sparser than create's (``order_id``,
-        ``client_order_id``, ``created_at`` — no side/type/price at all), so
-        after the shared parser fills in what it can, ``status`` is forced to
-        ``"cancel"`` — the one fact this call itself guarantees.
+        ``client_order_id``, ``created_at`` — no side/type/price at all).
+        ``status`` is forced to ``"cancel"`` — the one fact this call itself
+        guarantees — but ``side``/``type`` are deliberately left as ``""``:
+        the caller only passes ``order_id``/``symbol`` here, not the original
+        side/type, so there is nothing honest to fill them with. Do not guess.
         """
         params = {"order_id": order_id}
         data = await self._http.delete("/v2/order", params=params, headers=self._headers(params))

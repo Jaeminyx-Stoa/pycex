@@ -141,6 +141,7 @@ async def test_create_order_limit_buy(httpx_mock: HTTPXMock) -> None:
     assert body == expected_body
     _assert_bearer_query_hash(req.headers, expected_body)
     assert order.symbol == "BTC/KRW"
+    assert order.amount == 0.01 and order.price == 50_000_000
     await ex.close()
 
 
@@ -155,6 +156,7 @@ async def test_create_order_market_buy_uses_price_order_type(httpx_mock: HTTPXMo
     assert "volume" not in body
     _assert_bearer_query_hash(req.headers, expected_body)
     assert order.symbol == "BTC/KRW"
+    assert order.amount == 100_000 and order.price is None  # echoes the request, not the (partial) response
     await ex.close()
 
 
@@ -169,6 +171,7 @@ async def test_create_order_market_sell_uses_market_order_type(httpx_mock: HTTPX
     assert "price" not in body
     _assert_bearer_query_hash(req.headers, expected_body)
     assert order.symbol == "BTC/KRW"
+    assert order.amount == 0.02 and order.price is None
     await ex.close()
 
 
@@ -183,7 +186,24 @@ async def test_cancel_order(httpx_mock: HTTPXMock) -> None:
     _assert_bearer_query_hash(req.headers, {"order_id": "order-uuid-1"})
     assert order.id == "order-uuid-1"
     assert order.status == "cancel"
+    # cancel_order only knows order_id/symbol — it cannot know the original side/type,
+    # and the sparse v2 response doesn't carry them either, so both must stay unguessed.
+    assert order.side == "" and order.type == ""
     await ex.close()
+
+
+def test_parse_order_does_not_fabricate_side_or_type_for_sparse_response() -> None:
+    """The real DELETE /v2/order response shape carries no side/ord_type at all
+    (only order_id/client_order_id/created_at) — the shared parser must not guess."""
+    from pycex.exchanges._krw_v1 import _parse_order
+
+    raw_cancel_response = {
+        "order_id": "order-uuid-1",
+        "client_order_id": None,
+        "created_at": "2026-08-30T00:00:00+09:00",
+    }
+    order = _parse_order("BTC/KRW", raw_cancel_response)
+    assert order.side == "" and order.type == ""
 
 
 async def test_fetch_order(httpx_mock: HTTPXMock) -> None:
@@ -271,8 +291,11 @@ async def test_fetch_my_trades_fans_out_per_order_lookup(httpx_mock: HTTPXMock) 
     assert history_req.url.path == "/v2/orders/history"
     assert history_req.url.params["state"] == "done" and history_req.url.params["market"] == "KRW-BTC"
     assert history_req.url.params["limit"] == "20"  # default N
+    _assert_bearer_query_hash(history_req.headers, {"state": "done", "limit": 20, "market": "KRW-BTC"})
     assert detail_req_1.url.path == "/v1/order" and detail_req_1.url.params["uuid"] == "order-1"
+    _assert_bearer_query_hash(detail_req_1.headers, {"uuid": "order-1"})
     assert detail_req_2.url.path == "/v1/order" and detail_req_2.url.params["uuid"] == "order-2"
+    _assert_bearer_query_hash(detail_req_2.headers, {"uuid": "order-2"})
 
     assert len(trades) == 2
     assert trades[0].id == "trade-1" and trades[0].order_id == "order-1" and trades[0].fee_asset == "KRW"
@@ -286,6 +309,7 @@ async def test_fetch_my_trades_limit_capped_at_50(httpx_mock: HTTPXMock) -> None
     await ex.fetch_my_trades("BTC/KRW", limit=500)
     req = httpx_mock.get_request()
     assert req.url.params["limit"] == "50"
+    _assert_bearer_query_hash(req.headers, {"state": "done", "limit": 50, "market": "KRW-BTC"})
     await ex.close()
 
 

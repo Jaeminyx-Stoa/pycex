@@ -82,11 +82,18 @@ class Upbit(KrwV1Mixin, BaseExchange):
         **quote-currency total to spend**, not a base-asset quantity. Market
         sells use ``ord_type="market"`` with ``amount`` as the base-asset
         volume, matching every other adapter's convention.
+
+        The returned ``Order``'s ``side``/``type``/``amount``/``price`` echo
+        exactly what the caller passed in (``price`` forced to ``None`` for
+        market orders) rather than whatever Upbit's response happens to
+        contain — see ``raw`` for the actual response.
         """
         native = self.to_native(symbol)
-        upbit_side = "bid" if side.lower() == "buy" else "ask"
+        canonical_side = side.lower()
+        canonical_type = order_type.lower()
+        upbit_side = "bid" if canonical_side == "buy" else "ask"
         body: dict[str, Any] = {"market": native, "side": upbit_side}
-        if order_type.lower() == "limit":
+        if canonical_type == "limit":
             if price is None:
                 raise InvalidOrderError("limit order requires a price", exchange="upbit")
             body["ord_type"] = "limit"
@@ -99,7 +106,15 @@ class Upbit(KrwV1Mixin, BaseExchange):
             body["ord_type"] = "market"
             body["volume"] = str(amount)
         data = await self._http.post("/v1/orders", data=body, headers=self._headers(body))
-        return _parse_order(symbol, data)
+        parsed = _parse_order(symbol, data)
+        return parsed.model_copy(
+            update={
+                "side": canonical_side,
+                "type": canonical_type,
+                "amount": amount,
+                "price": price if canonical_type == "limit" else None,
+            }
+        )
 
     async def cancel_order(self, order_id: str, symbol: str) -> Order:
         params = {"uuid": order_id}
