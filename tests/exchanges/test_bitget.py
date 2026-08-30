@@ -186,6 +186,22 @@ def test_parse_candle_mix_array_shape() -> None:
     assert c.volume == float(raw[5])
 
 
+async def test_fetch_candles_page_spot_daily_uses_utc_suffixed_granularity(httpx_mock: HTTPXMock) -> None:
+    """🚨 Live-verified 2026-08-30 (Task 13): Bitget spot's bare `granularity=
+    1day` aligns to Hong Kong time (UTC+8), not UTC midnight — same trap as
+    OKX's bare `bar=1D`. `granularity=1Dutc` is required to match this
+    library's UTC-epoch-ms bar-open contract. Reuses the mix candle fixture —
+    the array shape's first six fields (ts/open/high/low/close/volume) are
+    identical between spot and mix."""
+    httpx_mock.add_response(json=load_fixture("bitget", "candles_linear_1d"))
+    ex = Bitget(market_type="spot")
+    await ex._fetch_candles_page("BTCUSDT", "1d", since=None, until=None, limit=100)
+    req = httpx_mock.get_request()
+    assert req.url.path == "/api/v2/spot/market/candles"
+    assert req.url.params["granularity"] == "1Dutc"
+    await ex.close()
+
+
 async def test_fetch_candles_page_linear_sends_product_type_granularity_and_range(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(json=load_fixture("bitget", "candles_linear_1d"))
     ex = Bitget(market_type="linear")
