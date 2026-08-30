@@ -102,19 +102,23 @@ def test_symbol_round_trip_linear() -> None:
 
 
 def test_parse_market_spot() -> None:
+    """Real spot ``lotSizeFilter`` shape (confirmed via WebFetch, 2026-08-30):
+    ``basePrecision``/``minOrderQty``/``minOrderAmt`` — no ``qtyStep`` (that
+    field only exists on linear rows)."""
     raw = {
         "symbol": "BTCUSDT",
         "baseCoin": "BTC",
         "quoteCoin": "USDT",
         "status": "Trading",
         "priceFilter": {"tickSize": "0.01"},
-        "lotSizeFilter": {"qtyStep": "0.000001", "minOrderAmt": "1"},
+        "lotSizeFilter": {"basePrecision": "0.000001", "minOrderQty": "0.000048", "minOrderAmt": "1"},
     }
     m = _parse_market(raw, "spot")
+    assert m is not None
     assert m.symbol == "BTC/USDT"
     assert m.native == "BTCUSDT"
     assert m.price_tick == 0.01
-    assert m.amount_step == 0.000001
+    assert m.amount_step == float(raw["lotSizeFilter"]["basePrecision"])
     assert m.min_notional == 1.0
     assert m.active is True
 
@@ -124,18 +128,39 @@ def test_parse_market_linear_derives_settle_symbol() -> None:
         "symbol": "BTCUSDT",
         "baseCoin": "BTC",
         "quoteCoin": "USDT",
+        "settleCoin": "USDT",
         "status": "Trading",
         "priceFilter": {"tickSize": "0.5"},
-        "lotSizeFilter": {"qtyStep": "0.001"},
+        "lotSizeFilter": {"qtyStep": "0.001", "minNotionalValue": "5"},
     }
     m = _parse_market(raw, "linear")
+    assert m is not None
     assert m.symbol == "BTC/USDT:USDT"
-    assert m.min_notional is None
+    assert m.amount_step == 0.001
+    assert m.min_notional == 5.0
+
+
+def test_parse_market_linear_skips_non_usdt_settle() -> None:
+    """Only USDT-settled linear contracts are in scope for this phase
+    (matching ``to_native``'s rejection of inverse/cross-settle symbols) —
+    a row whose ``settleCoin`` isn't the quote currency must be skipped
+    rather than silently mislabeled as USDT-settled."""
+    raw = {
+        "symbol": "BTCUSD",
+        "baseCoin": "BTC",
+        "quoteCoin": "USD",
+        "settleCoin": "BTC",
+        "status": "Trading",
+        "priceFilter": {"tickSize": "0.5"},
+        "lotSizeFilter": {"qtyStep": "1"},
+    }
+    assert _parse_market(raw, "linear") is None
 
 
 def test_parse_market_inactive_status() -> None:
     raw = {"symbol": "XUSDT", "baseCoin": "X", "quoteCoin": "USDT", "status": "Delisted"}
     m = _parse_market(raw, "spot")
+    assert m is not None
     assert m.active is False
 
 
@@ -153,7 +178,7 @@ async def test_fetch_markets_spot_populates_cache(httpx_mock: HTTPXMock) -> None
                         "quoteCoin": "USDT",
                         "status": "Trading",
                         "priceFilter": {"tickSize": "0.01"},
-                        "lotSizeFilter": {"qtyStep": "0.000001"},
+                        "lotSizeFilter": {"basePrecision": "0.000001", "minOrderAmt": "1"},
                     }
                 ],
             },
@@ -164,6 +189,7 @@ async def test_fetch_markets_spot_populates_cache(httpx_mock: HTTPXMock) -> None
     req = httpx_mock.get_request()
     assert req.url.params.get("category") == "spot"
     assert len(markets) == 1
+    assert markets[0].amount_step == 0.000001
     assert ex.from_native("BTCUSDT") == "BTC/USDT"
     await ex.close()
 
@@ -180,9 +206,10 @@ async def test_fetch_markets_linear_populates_cache_and_symbol(httpx_mock: HTTPX
                         "symbol": "BTCUSDT",
                         "baseCoin": "BTC",
                         "quoteCoin": "USDT",
+                        "settleCoin": "USDT",
                         "status": "Trading",
                         "priceFilter": {"tickSize": "0.5"},
-                        "lotSizeFilter": {"qtyStep": "0.001"},
+                        "lotSizeFilter": {"qtyStep": "0.001", "minNotionalValue": "5"},
                     }
                 ],
             },
@@ -193,6 +220,7 @@ async def test_fetch_markets_linear_populates_cache_and_symbol(httpx_mock: HTTPX
     req = httpx_mock.get_request()
     assert req.url.params.get("category") == "linear"
     assert markets[0].symbol == "BTC/USDT:USDT"
+    assert markets[0].min_notional == 5.0
     assert ex.from_native("BTCUSDT") == "BTC/USDT:USDT"
     await ex.close()
 
@@ -383,6 +411,36 @@ async def test_fetch_balance_get_signature_matches_query_string(httpx_mock: HTTP
     await ex.fetch_balance()
     req = httpx_mock.get_request()
     assert req.url.path == "/v5/account/wallet-balance"
+    _assert_valid_get_signature(req)
+    await ex.close()
+
+
+async def test_fetch_my_trades_multi_param_signature_matches_query_string(httpx_mock: HTTPXMock) -> None:
+    """Regression: with both ``symbol`` and ``limit`` set, a signer that
+    signs a differently-ordered (e.g. alphabetically sorted) query string
+    than the one actually sent on the wire produces a signature Bybit would
+    reject on every real request — a single-param request (e.g. balance's
+    ``accountType`` only) can't catch this, so this needs >= 2 params."""
+    httpx_mock.add_response(json={"retCode": 0, "retMsg": "OK", "result": {"category": "spot", "list": []}})
+    ex = Bybit(api_key="k", secret=SECRET)
+    await ex.fetch_my_trades("BTC/USDT", limit=10)
+    req = httpx_mock.get_request()
+    assert req.url.path == "/v5/execution/list"
+    assert req.url.params.get("category") == "spot"
+    assert req.url.params.get("symbol") == "BTCUSDT"
+    assert req.url.params.get("limit") == "10"
+    _assert_valid_get_signature(req)
+    await ex.close()
+
+
+async def test_fetch_open_orders_multi_param_signature_matches_query_string(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(json={"retCode": 0, "retMsg": "OK", "result": {"category": "spot", "list": []}})
+    ex = Bybit(api_key="k", secret=SECRET)
+    await ex.fetch_open_orders("BTC/USDT")
+    req = httpx_mock.get_request()
+    assert req.url.path == "/v5/order/realtime"
+    assert req.url.params.get("category") == "spot"
+    assert req.url.params.get("symbol") == "BTCUSDT"
     _assert_valid_get_signature(req)
     await ex.close()
 

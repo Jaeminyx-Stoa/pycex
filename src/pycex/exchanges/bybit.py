@@ -19,9 +19,11 @@ Doc verification (2026-08-30), via ``WebFetch`` against the live docs:
   encoding, breaking the signature the moment separators/key order differ.
 - ``market/instrument`` (``GET /v5/market/instruments-info``): confirmed
   field names ``symbol``, ``baseCoin``, ``quoteCoin``, ``status`` (value
-  ``"Trading"`` for active) at the top level, and ``priceFilter.tickSize``,
-  ``lotSizeFilter.qtyStep``, ``lotSizeFilter.minOrderAmt`` (spot-only,
-  minimum order *value*, not quantity) nested one level down.
+  ``"Trading"`` for active) at the top level, and ``priceFilter.tickSize``
+  nested one level down. ``lotSizeFilter``'s shape differs by category:
+  spot has ``basePrecision``/``minOrderAmt`` (no ``qtyStep``); linear has
+  ``qtyStep``/``minNotionalValue`` (no ``basePrecision``) plus a top-level
+  ``settleCoin`` — see ``_parse_market``.
 - ``order/execution`` (``GET /v5/execution/list``): confirmed field names
   ``execId``, ``orderId``, ``symbol``, ``side``, ``execPrice``, ``execQty``,
   ``execFee``, ``feeCurrency``, ``execTime`` (ms) — all listed as always
@@ -40,6 +42,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from urllib.parse import urlencode
 
 from pycex.auth import bybit_headers
 from pycex.base import BaseExchange
@@ -140,6 +143,23 @@ class Bybit(BaseExchange):
     def _auth_get_headers(self, query: str) -> dict[str, str]:
         return bybit_headers(self._api_key, self._secret, query)
 
+    def _signed_get_request(self, path: str, params: dict[str, Any]) -> tuple[str, dict[str, str]]:
+        """Bake ``params`` into the exact query string once, sign that same
+        string, and return ``(path_with_query, headers)``. A prior version
+        of this adapter signed a separately-sorted query string while
+        letting httpx build the wire query from the original (insertion-
+        order) params dict — those two only matched when a request had at
+        most one param; ``fetch_my_trades(symbol=..., limit=...)`` produced
+        a signed string that didn't match what was actually sent. Building
+        the query once and sending the *same* string as the URL (with
+        ``params=None`` on the ``HTTPClient.get`` call) makes that class of
+        drift structurally impossible — same pattern as Bitget's ``_path``.
+        """
+        query = urlencode(params)
+        full_path = f"{path}?{query}" if query else path
+        headers = self._auth_get_headers(query)
+        return full_path, headers
+
     def _auth_post_headers(self, body_str: str) -> dict[str, str]:
         """Sign the exact JSON body string that will go on the wire. Callers
         must pass this same ``body_str`` to ``HTTPClient.post_raw`` — never
@@ -193,16 +213,15 @@ class Bybit(BaseExchange):
         params = {"category": self._category}
         data = await self._http.get("/v5/market/instruments-info", params=params)
         result = self._check(data)
-        markets = [_parse_market(d, self.market_type) for d in result.get("list", [])]
+        markets = [m for d in result.get("list", []) if (m := _parse_market(d, self.market_type)) is not None]
         self._markets = {m.native: m for m in markets}
         return markets
 
     # ── Account ──
 
     async def fetch_balance(self) -> Balance:
-        query = "accountType=UNIFIED"
-        headers = self._auth_get_headers(query)
-        data = await self._http.get("/v5/account/wallet-balance", params={"accountType": "UNIFIED"}, headers=headers)
+        full_path, headers = self._signed_get_request("/v5/account/wallet-balance", {"accountType": "UNIFIED"})
+        data = await self._http.get(full_path, headers=headers)
         result = self._check(data)
         return _parse_balance(result, data)
 
@@ -245,9 +264,9 @@ class Bybit(BaseExchange):
 
     async def fetch_order(self, order_id: str, symbol: str) -> Order:
         native = self.to_native(symbol)
-        query = f"category={self._category}&symbol={native}&orderId={order_id}"
         params = {"category": self._category, "symbol": native, "orderId": order_id}
-        data = await self._http.get("/v5/order/realtime", params=params, headers=self._auth_get_headers(query))
+        full_path, headers = self._signed_get_request("/v5/order/realtime", params)
+        data = await self._http.get(full_path, headers=headers)
         result = self._check(data)
         if result.get("list"):
             return _parse_order(symbol, result["list"][0])
@@ -257,8 +276,8 @@ class Bybit(BaseExchange):
         params: dict[str, Any] = {"category": self._category}
         if symbol:
             params["symbol"] = self.to_native(symbol)
-        query = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
-        data = await self._http.get("/v5/order/realtime", params=params, headers=self._auth_get_headers(query))
+        full_path, headers = self._signed_get_request("/v5/order/realtime", params)
+        data = await self._http.get(full_path, headers=headers)
         result = self._check(data)
         return [_parse_order(self.from_native(o.get("symbol", "")), o) for o in result.get("list", [])]
 
@@ -270,8 +289,8 @@ class Bybit(BaseExchange):
             params["symbol"] = self.to_native(symbol)
         if limit is not None:
             params["limit"] = limit
-        query = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
-        data = await self._http.get("/v5/execution/list", params=params, headers=self._auth_get_headers(query))
+        full_path, headers = self._signed_get_request("/v5/execution/list", params)
+        data = await self._http.get(full_path, headers=headers)
         result = self._check(data)
         trades = [
             _parse_my_trade(symbol if symbol is not None else self.from_native(str(t.get("symbol", ""))), t)
@@ -331,20 +350,39 @@ def _parse_trade(symbol: str, t: dict[str, Any]) -> Trade:
     )
 
 
-def _parse_market(d: dict[str, Any], market_type: MarketType) -> Market:
+def _parse_market(d: dict[str, Any], market_type: MarketType) -> Market | None:
     """Parse one ``GET /v5/market/instruments-info`` row (see module
-    docstring for field-name confirmation). ``minOrderAmt`` (a notional
-    floor, spot-only) maps to ``min_notional``; there is no linear
-    equivalent in this response, so it is ``None`` for linear rows."""
+    docstring for field-name confirmation).
+
+    ``lotSizeFilter``'s shape differs by category (confirmed via WebFetch,
+    2026-08-30): spot carries ``basePrecision`` (already a step size, not a
+    decimal-place count) and no ``qtyStep``; linear carries ``qtyStep`` and
+    no ``basePrecision``. Read ``qtyStep`` first and fall back to
+    ``basePrecision`` so one line covers both. The notional-floor field name
+    also differs: spot's ``minOrderAmt`` vs. linear's ``minNotionalValue``.
+
+    Linear rows additionally carry a top-level ``settleCoin``; only
+    USDT-settled contracts are in scope for this phase (matching
+    ``to_native``'s rejection of inverse/cross-settle symbols), so a linear
+    row whose settle currency isn't the quote currency is skipped (returns
+    ``None``) rather than silently mislabeled as USDT-settled.
+    """
     native = str(d.get("symbol", ""))
     base = str(d.get("baseCoin", ""))
     quote = str(d.get("quoteCoin", ""))
-    symbol = make_linear_symbol(base, quote, quote) if market_type == "linear" else make_spot_symbol(base, quote)
-    price_filter = d.get("priceFilter") or {}
     lot_filter = d.get("lotSizeFilter") or {}
+    if market_type == "linear":
+        settle = str(d.get("settleCoin") or quote)
+        if settle != quote:
+            return None
+        symbol = make_linear_symbol(base, quote, quote)
+        min_notional_raw = lot_filter.get("minNotionalValue")
+    else:
+        symbol = make_spot_symbol(base, quote)
+        min_notional_raw = lot_filter.get("minOrderAmt")
+    price_filter = d.get("priceFilter") or {}
     tick = price_filter.get("tickSize")
-    step = lot_filter.get("qtyStep")
-    min_notional_raw = lot_filter.get("minOrderAmt")
+    step = lot_filter.get("qtyStep") or lot_filter.get("basePrecision")
     return Market(
         symbol=symbol,
         native=native,

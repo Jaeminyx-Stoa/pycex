@@ -164,6 +164,17 @@ def test_cli_unknown_exchange_exits_1() -> None:
     assert e.value.code == 1
 
 
+def test_cli_adapter_constructor_rejection_exits_1_no_traceback() -> None:
+    """Upbit's constructor raises NotSupportedError (a PyCexError, not a
+    ValueError) for sandbox=True — this must exit cleanly with the message,
+    the same as an unknown exchange name, not propagate as an unhandled
+    exception."""
+    args = _namespace(exchange="upbit", api_key="k", secret="s", sandbox=True)
+    with pytest.raises(SystemExit) as e:
+        _make_exchange(args)
+    assert e.value.code == 1
+
+
 def test_cli_default_exchange_is_binance_when_env_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("PYCEX_EXCHANGE", raising=False)
     args = _namespace(exchange=None, api_key="k", secret="s")

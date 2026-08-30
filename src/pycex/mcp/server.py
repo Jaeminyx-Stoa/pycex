@@ -50,6 +50,31 @@ mcp = FastMCP(
 
 _TRUTHY = ("1", "true", "yes")
 
+# Default fan-out set for compare_prices/aggregate_balance — six of the
+# seven adapters (bybit excluded by controller ruling); overridable via
+# PYCEX_COMPARE_EXCHANGES.
+_DEFAULT_COMPARE_EXCHANGES = "binance,okx,bitget,upbit,bithumb,korbit"
+
+
+def _compare_exchange_names() -> list[str]:
+    """Exchanges iterated by ``compare_prices``/``aggregate_balance``,
+    controlled by ``PYCEX_COMPARE_EXCHANGES`` (comma-separated, case-
+    insensitive). Factored out so both tools — and tests — share one
+    source of truth for "which exchanges get iterated"."""
+    raw = os.environ.get("PYCEX_COMPARE_EXCHANGES", _DEFAULT_COMPARE_EXCHANGES)
+    return [n.strip().lower() for n in raw.split(",") if n.strip()]
+
+
+def _compare_sandbox_and_market_type() -> tuple[bool, MarketType]:
+    """Sandbox/market-type for the multi-exchange tools. Unlike
+    ``_get_exchange``, this deliberately does *not* fall back to the
+    deprecated ``PYCEX_TESTNET`` — these two tools are new factory-based
+    code, not a migrated single-exchange path, so there's no legacy config
+    to stay compatible with."""
+    sandbox = os.environ.get("PYCEX_SANDBOX", "").lower() in _TRUTHY
+    market_type: MarketType = "linear" if os.environ.get("PYCEX_MARKET_TYPE", "").lower() == "linear" else "spot"
+    return sandbox, market_type
+
 
 def _get_exchange() -> BaseExchange:
     """Initialize exchange from env vars, via the shared factory."""
@@ -186,33 +211,28 @@ def compare_prices(symbol: str) -> str:
     """여러 거래소의 가격을 동시에 비교합니다. 차익거래 기회도 분석합니다.
 
     Args:
-        symbol: 거래쌍 (Binance/Bybit: "BTCUSDT", OKX: "BTC-USDT")
+        symbol: 정규 거래쌍, 예: "BTC/USDT" (원화 거래소는 "BTC/KRW")
     """
-    from pycex import OKX, Binance, Bybit
-
-    testnet = os.environ.get("PYCEX_TESTNET", "").lower() in ("1", "true", "yes")
-    okx_symbol = symbol.replace("USDT", "-USDT") if "-" not in symbol else symbol
-    spot_symbol = symbol.replace("-", "") if "-" in symbol else symbol
+    names = _compare_exchange_names()
+    sandbox, market_type = _compare_sandbox_and_market_type()
 
     results: dict[str, Any] = {}
-    for name, cls, sym in [
-        ("binance", Binance, spot_symbol),
-        ("bybit", Bybit, spot_symbol),
-        ("okx", OKX, okx_symbol),
-    ]:
+    for name in names:
         try:
-            ex = cls(testnet=testnet) if name != "okx" else cls(demo=testnet)
-            ticker = ex.fetch_ticker_sync(sym)
-            results[name] = {"price": ticker.last, "bid": ticker.bid, "ask": ticker.ask, "volume": ticker.volume}
-            ex.close_sync()
+            ex = create_exchange(name, sandbox=sandbox, market_type=market_type)
+            try:
+                ticker = ex.fetch_ticker_sync(symbol)
+                results[name] = {"price": ticker.last, "bid": ticker.bid, "ask": ticker.ask, "volume": ticker.volume}
+            finally:
+                ex.close_sync()
         except Exception as e:
             results[name] = {"error": str(e)}
 
     prices = {k: v["price"] for k, v in results.items() if "price" in v}
     arb: dict[str, Any] = {}
     if len(prices) >= 2:
-        cheapest = min(prices, key=prices.get)  # type: ignore[arg-type]
-        most_expensive = max(prices, key=prices.get)  # type: ignore[arg-type]
+        cheapest, _cheapest_price = min(prices.items(), key=lambda kv: kv[1])
+        most_expensive, _expensive_price = max(prices.items(), key=lambda kv: kv[1])
         spread_pct = (prices[most_expensive] - prices[cheapest]) / prices[cheapest] * 100
         arb = {
             "buy_on": cheapest,
@@ -293,61 +313,37 @@ def analyze_chart(symbol: str, timeframe: str = "1h", period: int = 50) -> str:
 
 @mcp.tool()
 def aggregate_balance() -> str:
-    """모든 거래소의 잔고를 통합 조회합니다. 각 거래소별 API 키가 환경변수에 설정되어 있어야 합니다.
+    """모든 거래소의 잔고를 통합 조회합니다.
 
-    환경변수: BINANCE_API_KEY/SECRET, BYBIT_API_KEY/SECRET, OKX_API_KEY/SECRET/PASSPHRASE
+    ``PYCEX_{EXCHANGE}_API_KEY``(예: ``PYCEX_BINANCE_API_KEY``)가 설정된 거래소만
+    조회하며, 키가 없는 거래소는 건너뛰고 결과의 ``by_exchange``에 그 사실을
+    표시합니다. 조회 대상 목록은 ``PYCEX_COMPARE_EXCHANGES``(콤마 구분, 기본값:
+    binance,okx,bitget,upbit,bithumb,korbit)로 제어합니다.
     """
-    from pycex import OKX, Binance, Bybit
-
-    testnet = os.environ.get("PYCEX_TESTNET", "").lower() in ("1", "true", "yes")
-    exchanges_config = [
-        (
-            "binance",
-            Binance,
-            {
-                "api_key": os.environ.get("BINANCE_API_KEY", os.environ.get("PYCEX_API_KEY", "")),
-                "secret": os.environ.get("BINANCE_SECRET", os.environ.get("PYCEX_SECRET", "")),
-                "testnet": testnet,
-            },
-        ),
-        (
-            "bybit",
-            Bybit,
-            {
-                "api_key": os.environ.get("BYBIT_API_KEY", ""),
-                "secret": os.environ.get("BYBIT_SECRET", ""),
-                "testnet": testnet,
-            },
-        ),
-        (
-            "okx",
-            OKX,
-            {
-                "api_key": os.environ.get("OKX_API_KEY", ""),
-                "secret": os.environ.get("OKX_SECRET", ""),
-                "passphrase": os.environ.get("OKX_PASSPHRASE", ""),
-                "demo": testnet,
-            },
-        ),
-    ]
+    names = _compare_exchange_names()
+    sandbox, market_type = _compare_sandbox_and_market_type()
 
     all_assets: dict[str, dict[str, Any]] = {}
     exchange_balances: dict[str, Any] = {}
 
-    for name, cls, kwargs in exchanges_config:
-        if not kwargs.get("api_key"):
+    for name in names:
+        env_key = f"PYCEX_{name.upper()}_API_KEY"
+        if not os.environ.get(env_key, ""):
+            exchange_balances[name] = {"skipped": f"{env_key} not configured"}
             continue
         try:
-            ex = cls(**kwargs)
-            bal = ex.fetch_balance_sync()
-            exchange_balances[name] = [{"asset": a.asset, "free": a.free, "locked": a.locked} for a in bal.assets]
-            for a in bal.assets:
-                if a.asset not in all_assets:
-                    all_assets[a.asset] = {"total_free": 0, "total_locked": 0, "exchanges": []}
-                all_assets[a.asset]["total_free"] += a.free
-                all_assets[a.asset]["total_locked"] += a.locked
-                all_assets[a.asset]["exchanges"].append({"exchange": name, "free": a.free, "locked": a.locked})
-            ex.close_sync()
+            ex = create_exchange(name, sandbox=sandbox, market_type=market_type)
+            try:
+                bal = ex.fetch_balance_sync()
+                exchange_balances[name] = [{"asset": a.asset, "free": a.free, "locked": a.locked} for a in bal.assets]
+                for a in bal.assets:
+                    if a.asset not in all_assets:
+                        all_assets[a.asset] = {"total_free": 0, "total_locked": 0, "exchanges": []}
+                    all_assets[a.asset]["total_free"] += a.free
+                    all_assets[a.asset]["total_locked"] += a.locked
+                    all_assets[a.asset]["exchanges"].append({"exchange": name, "free": a.free, "locked": a.locked})
+            finally:
+                ex.close_sync()
         except Exception as e:
             exchange_balances[name] = {"error": str(e)}
 

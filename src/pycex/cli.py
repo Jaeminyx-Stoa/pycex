@@ -9,6 +9,7 @@ import sys
 import warnings
 
 from pycex.base import BaseExchange
+from pycex.exceptions import PyCexError
 from pycex.factory import EXCHANGES, create_exchange
 from pycex.symbols import MarketType
 
@@ -35,7 +36,12 @@ def _make_exchange(args: argparse.Namespace) -> BaseExchange:
             sandbox=sandbox,
             market_type=market_type,
         )
-    except ValueError as e:
+    except (ValueError, PyCexError) as e:
+        # ValueError: unknown exchange name (raised by create_exchange itself).
+        # PyCexError: an adapter's own constructor rejecting the combination,
+        # e.g. NotSupportedError("upbit has no sandbox environment") — both
+        # are user input errors, not bugs, so exit clean with the message
+        # instead of a traceback.
         print(str(e), file=sys.stderr)
         sys.exit(1)
 
