@@ -107,6 +107,26 @@ class HTTPClient:
         except httpx.HTTPError as e:
             raise NetworkError(str(e)) from e
 
+    async def post_raw(self, path: str, *, body: str, headers: dict[str, str] | None = None) -> Any:
+        """POST a pre-serialized JSON body verbatim (async only — no sync twin).
+
+        Sends ``body`` exactly as given via ``content=`` rather than handing a
+        dict to httpx's own ``json=`` encoding (which re-serializes with its
+        own separators, e.g. compact vs. ``json.dumps``'s default ``", "``/
+        ``": "``). Callers whose signature covers the literal byte string being
+        sent — e.g. OKX, whose prehash is ``ts + method + path + body`` — need
+        the signed string and the wire bytes to be byte-for-byte identical;
+        going through ``post()``'s ``json=`` would re-serialize and silently
+        break every such signature.
+        """
+        await self._limiter.acquire()
+        merged_headers = {"Content-Type": "application/json", **(headers or {})}
+        try:
+            resp = await self._client.post(path, content=body.encode(), headers=merged_headers)
+            return self._handle_response(resp)
+        except httpx.HTTPError as e:
+            raise NetworkError(str(e)) from e
+
     async def post_form(
         self, path: str, *, data: dict[str, Any] | None = None, headers: dict[str, str] | None = None
     ) -> Any:

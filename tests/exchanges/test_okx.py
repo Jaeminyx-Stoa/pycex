@@ -48,16 +48,16 @@ SECRET = "s"
 def _assert_valid_signature(request: httpx.Request, secret: str = SECRET) -> None:
     """Recompute HMAC-SHA256 independently (plain ``hmac``/``base64``, not the
     adapter's own ``okx_headers``) over the real outgoing request — timestamp
-    from the sent ``OK-ACCESS-TIMESTAMP`` header, path including the actual
-    query string, body from the actual request content — and assert it
-    matches. A self-referential call to ``okx_headers`` would be a tautology.
+    from the sent ``OK-ACCESS-TIMESTAMP`` header, ``url.raw_path`` (path +
+    query, exactly as sent on the wire), body from the actual request
+    content — and assert it matches. A self-referential call to
+    ``okx_headers`` would be a tautology; for POST requests this also catches
+    a body that was signed as one string but sent as a re-serialized one
+    (e.g. ``post()``'s ``json=`` vs. ``post_raw()``'s verbatim ``content=``).
     """
     ts = request.headers["OK-ACCESS-TIMESTAMP"]
     method = request.method
-    path = request.url.path
-    query = request.url.query.decode()
-    if query:
-        path += "?" + query
+    path = request.url.raw_path.decode()
     body = request.content.decode() if request.content else ""
     message = ts + method + path + body
     expected = base64.b64encode(hmac.new(secret.encode(), message.encode(), hashlib.sha256).digest()).decode()
@@ -205,6 +205,20 @@ async def test_candles_history_fallback_on_empty_regular_response(httpx_mock: HT
     assert reqs[1].url.params.get("before") == str(since - 1)
     assert len(candles) == 3
     assert candles == sorted(candles, key=lambda c: c.timestamp)
+    await ex.close()
+
+
+async def test_fetch_candles_page_clamps_limit_to_100(httpx_mock: HTTPXMock) -> None:
+    """history-candles caps limit at 100; a caller-requested 200 must be
+    clamped before either request goes out (OKX.candle_page_limit = 100)."""
+    httpx_mock.add_response(json={"code": "0", "msg": "", "data": []})
+    httpx_mock.add_response(json={"code": "0", "msg": "", "data": []})
+    ex = OKX(market_type="linear")
+    assert ex.candle_page_limit == 100
+    await ex._fetch_candles_page("BTC-USDT-SWAP", "1d", since=1787846400000, until=None, limit=200)
+    reqs = httpx_mock.get_requests()
+    assert reqs[0].url.params["limit"] == "100"
+    assert reqs[1].url.params["limit"] == "100"
     await ex.close()
 
 
@@ -503,6 +517,74 @@ async def test_create_order_spot_uses_cash_td_mode(httpx_mock: HTTPXMock) -> Non
     req = httpx_mock.get_request()
     body = json_lib.loads(req.content.decode())
     assert body["tdMode"] == "cash"
+    await ex.close()
+
+
+# ── create_order/cancel_order: signature covers the verbatim wire body ──
+
+
+async def test_create_order_signature_matches_verbatim_wire_body(httpx_mock: HTTPXMock) -> None:
+    """The prehash must be computed over the exact bytes sent on the wire, not
+    over a dict that gets re-serialized separately by httpx — otherwise every
+    real order would fail OKX's signature check. Recomputes independently from
+    the real captured request rather than calling the adapter's own signer."""
+    httpx_mock.add_response(json={"code": "0", "msg": "", "data": [{"ordId": "1"}]})
+    ex = OKX(api_key="k", secret="s", passphrase="p")
+    await ex.create_order("BTC/USDT", "buy", "limit", 0.001, 50000.0)
+    req = httpx_mock.get_request()
+    assert req.headers["Content-Type"] == "application/json"
+    _assert_valid_signature(req)
+    await ex.close()
+
+
+async def test_cancel_order_signature_matches_verbatim_wire_body(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(json={"code": "0", "msg": "", "data": [{"ordId": "1"}]})
+    ex = OKX(api_key="k", secret="s", passphrase="p")
+    await ex.cancel_order("1", "BTC/USDT")
+    req = httpx_mock.get_request()
+    assert req.headers["Content-Type"] == "application/json"
+    _assert_valid_signature(req)
+    await ex.close()
+
+
+# ── create_order/cancel_order: sCode rejection (HTTP 200, code=="0") ──
+
+
+async def test_create_order_scode_rejection_raises_insufficient_balance(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        json={
+            "code": "0",
+            "msg": "",
+            "data": [{"ordId": "", "clOrdId": "", "tag": "", "sCode": "51008", "sMsg": "Insufficient balance"}],
+        }
+    )
+    ex = OKX(api_key="k", secret="s", passphrase="p")
+    with pytest.raises(InsufficientBalanceError):
+        await ex.create_order("BTC/USDT", "buy", "market", 1000)
+    await ex.close()
+
+
+async def test_cancel_order_scode_rejection_raises_order_not_found(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        json={
+            "code": "0",
+            "msg": "",
+            "data": [{"ordId": "1", "clOrdId": "", "sCode": "51603", "sMsg": "Order does not exist"}],
+        }
+    )
+    ex = OKX(api_key="k", secret="s", passphrase="p")
+    with pytest.raises(OrderNotFoundError):
+        await ex.cancel_order("1", "BTC/USDT")
+    await ex.close()
+
+
+async def test_create_order_scode_zero_does_not_raise(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        json={"code": "0", "msg": "", "data": [{"ordId": "1", "clOrdId": "", "sCode": "0", "sMsg": ""}]}
+    )
+    ex = OKX(api_key="k", secret="s", passphrase="p")
+    order = await ex.create_order("BTC/USDT", "buy", "market", 1)
+    assert order.id == "1"
     await ex.close()
 
 

@@ -280,6 +280,19 @@ with OKX(api_key="KEY", secret="SECRET", passphrase="PASS", market_type="linear"
   regular `/api/v5/market/candles` endpoint returns an empty `data` array —
   that endpoint only serves a recent rolling window, and empty is how it
   signals "ask history-candles instead" rather than returning an error.
+  **History backfill pages are capped at 100 bars** (`history-candles`'
+  `limit` maximum) — `OKX.candle_page_limit = 100`, and `_fetch_candles_page`
+  clamps any larger `limit` down to 100 before either call, even though the
+  recent `/market/candles` endpoint itself would accept up to 300.
+- `create_order`/`cancel_order` sign and send the **identical** JSON string
+  (`HTTPClient.post_raw`, not `post`) — OKX's signature covers the literal
+  request body bytes, and httpx's own `json=` encoding re-serializes a dict
+  with different separators than `json.dumps`, which would silently break
+  every signed order/cancel. A rejection on either call can also arrive as
+  HTTP 200 + top-level `code == "0"` with the real failure in
+  `data[0].sCode`/`sMsg` (e.g. `sCode: "51008"` for insufficient balance) —
+  both methods check `sCode` after the top-level check and raise through the
+  same error mapping.
 
 ## Upbit
 

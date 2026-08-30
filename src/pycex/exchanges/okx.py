@@ -104,6 +104,10 @@ _TIMEFRAME_MAP = {
 
 class OKX(BaseExchange):
     name = "okx"
+    # history-candles caps `limit` at 100 (the recent /market/candles endpoint
+    # allows up to 300, but pagination must stay within the tighter of the two
+    # since either endpoint may serve a given page — see _fetch_candles_page).
+    candle_page_limit = 100
 
     def __init__(
         self,
@@ -185,6 +189,10 @@ class OKX(BaseExchange):
     async def _fetch_candles_page(
         self, native: str, timeframe: str, *, since: int | None, until: int | None, limit: int
     ) -> list[Candle]:
+        # /api/v5/market/history-candles caps `limit` at 100; clamp before either
+        # call (the fallback below reuses these same params verbatim) so a page
+        # that falls through to history-candles never gets rejected.
+        limit = min(limit, 100)
         params: dict[str, Any] = {
             "instId": native,
             "bar": _TIMEFRAME_MAP.get(timeframe, timeframe),
@@ -282,9 +290,10 @@ class OKX(BaseExchange):
         # one-way mode (OKX's default). A hedge-mode account requires
         # posSide="long"/"short" on every order — see module docstring.
         body_str = json.dumps(body)
-        data = await self._http.post(path, data=body, headers=self._auth_headers("POST", path, body_str))
+        data = await self._http.post_raw(path, body=body_str, headers=self._auth_headers("POST", path, body_str))
         result = self._check(data)
         r = result[0] if result else {}
+        _raise_on_scode(r)
         return Order(
             id=r.get("ordId", ""),
             symbol=symbol,
@@ -300,9 +309,10 @@ class OKX(BaseExchange):
         native = self.to_native(symbol)
         body = {"instId": native, "ordId": order_id}
         body_str = json.dumps(body)
-        data = await self._http.post(path, data=body, headers=self._auth_headers("POST", path, body_str))
+        data = await self._http.post_raw(path, body=body_str, headers=self._auth_headers("POST", path, body_str))
         result = self._check(data)
         r = result[0] if result else {}
+        _raise_on_scode(r)
         return Order(id=r.get("ordId", order_id), symbol=symbol, side="", type="", amount=0, raw=data)
 
     async def fetch_order(self, order_id: str, symbol: str) -> Order:
@@ -544,3 +554,15 @@ def _error_mapper(status: int, data: dict[str, Any]) -> PyCexError | None:
     if code is None:
         return None
     return _map_error(str(code), str(data.get("msg", "Unknown error")))
+
+
+def _raise_on_scode(item: dict[str, Any]) -> None:
+    """Order/cancel rejections on OKX arrive as HTTP 200 + top-level ``code ==
+    "0"`` (which ``_check`` treats as success) with the actual per-item
+    rejection in ``data[0].sCode``/``sMsg`` instead — a batch endpoint shape
+    where one order in the array can fail while others succeed. Reuses
+    ``_map_error`` for the same code table (``51008`` -> insufficient balance,
+    ``51603`` -> order not found, etc.)."""
+    s_code = str(item.get("sCode", "0"))
+    if s_code != "0":
+        raise _map_error(s_code, item.get("sMsg", "Unknown error"))
