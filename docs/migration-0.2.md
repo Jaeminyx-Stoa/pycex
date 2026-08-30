@@ -58,7 +58,9 @@ as a fallback for `PYCEX_SANDBOX`.
 - `fetch_markets()` (unified `Market` model) and `fetch_my_trades()`
   (unified `MyTrade` model) are now part of the base interface on every
   adapter, not just some.
-- `fetch_candles(..., since=..., until=...)` paginates automatically.
+- `fetch_candles(..., since=..., until=...)` paginates automatically, in
+  whichever direction the venue actually pages (see the per-venue table in
+  `README.md`); results are deduplicated and ascending either way.
 - `pycex.factory.create_exchange(name, ...)` — one function to construct any
   of the seven adapters by name, with per-exchange env var fallback. The CLI
   and MCP server both use it internally.

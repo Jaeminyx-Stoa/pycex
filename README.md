@@ -179,6 +179,45 @@ with Bybit() as ex:
 다르므로, KST 캘린더 날짜 하나에 대응하는 원장 봉이 두 거래소에서 서로 다를 수
 있습니다. 자세한 근거는 `tests/fixtures/NOTES.md`를 참고하세요.
 
+### 캔들 페이지네이션 — 거래소별 실측
+
+`since`/`until` 을 주면 `fetch_candles` 가 거래소 상한을 넘는 구간을 자동으로
+페이징합니다. 페이징 방향은 거래소마다 다르고, **문서가 아니라 실측으로**
+정했습니다 (2026-08-30 공개 엔드포인트 프로브):
+
+| Exchange | 1페이지 상한 | 페이징 방향 | 커서 파라미터 |
+|----------|:---:|:---:|---|
+| Binance (spot·linear) | 200 | forward | `startTime` — 가장 **오래된** 구간부터 |
+| Bybit (spot·linear) | 200 | backward | `end` |
+| OKX (spot·linear) | 100 | backward | `after` |
+| Bitget (spot·linear) | 200 | backward | `endTime` |
+| Upbit | 200 | backward | `to` |
+| Bithumb | 200 | backward | `to` |
+| Korbit | 200 | backward | `end` |
+
+- **backward** = 그 거래소의 캔들 엔드포인트는 `since` 를 시작점으로 쓰지 않고
+  `until`(없으면 "지금") 기준으로 **가장 최근** 봉부터 되돌려줍니다. 그래서
+  `fetch_candles` 는 커서를 위가 아니라 아래로 내리며 걷습니다
+  (`BaseExchange.candle_paging`).
+- Bybit·Bitget mix 는 `start` 만 보내면 오래된 쪽을, `start`+`end` 를 같이
+  보내면 최신 쪽을 돌려줍니다. 구간 조회는 후자이므로 backward 로 걷습니다.
+  Bitget mix 는 두 경계를 90일 넘게 같이 보내면 아예 오류입니다.
+- 어느 방향이든 결과 계약은 같습니다: **중복 제거 · 시간 오름차순 ·
+  `[since, until]` 안 · `limit` 개까지**.
+- 실측 결과(2026-08-30, 11개 surface 전부): 1h × 15일 = 360/360봉,
+  1d × 300일 = 300/300봉. 재현은 `pytest -m live tests/live -k pagination`.
+
+🚨 **Upbit·Bithumb 의 `to` 는 타임존 해석이 다릅니다.** Upbit 은 `Z` 접미사를
+받고 naive 값을 **UTC** 로 읽습니다. Bithumb 은 타임존 접미사가 붙으면 (`Z`,
+`+00:00` 모두) HTTP 200 + `{"error":{"name":400,...}}` 로 거부하고, naive 값을
+**KST** 로 읽습니다. 어댑터가 `_format_to` 훅으로 각각 맞춰 보내므로 호출부는
+언제나 UTC epoch ms(`until=`) 만 주면 됩니다.
+
+🚨 **Bithumb 은 오류도 HTTP 200 으로 보냅니다** (`{"error":{"name":404,...}}`).
+`KrwV1Mixin._check` 가 상태 코드와 무관하게 이 봉투를 잡아 `PyCexError` 로
+올립니다 — 두 거래소 모두 알 수 없는 마켓 코드에 `error.name` 을 **정수** 404
+로 돌려주므로 `SymbolNotFoundError` 가 됩니다.
+
 ## Supported Exchanges
 
 | Exchange | spot | linear | sandbox | markets | candles+pagination | orders | balance | my_trades | positions | funding |
@@ -192,6 +231,9 @@ with Bybit() as ex:
 | Korbit   | ○ | ✕ | ✕ | ○ | ○ | ○ | ○ | ○ | ✕ | ✕ |
 
 Bybit `linear`: markets/candles/orders/balance/my_trades all work under `category=linear`; positions/funding are not yet wired (out of phase-1 scope for this adapter) and raise `NotSupportedError` like a spot instance.
+
+`candles+pagination` ○ 는 "`since`/`until` 로 한 페이지를 넘는 구간을 요청하면
+빠짐없이 돌려준다"는 뜻이고, 위 실측 표가 그 근거입니다.
 
 `linear` = USDT-margined perpetual futures (`market_type="linear"`). Upbit,
 Bithumb, and Korbit are KRW spot exchanges only — `sandbox=True` or

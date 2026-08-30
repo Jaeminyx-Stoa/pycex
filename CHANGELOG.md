@@ -27,9 +27,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   interface for every adapter.
 - `fetch_markets()` — unified `Market` model (native symbol, base/quote,
   price tick, amount step, min notional, active flag) on every adapter.
-- Candle pagination via `since=`/`until=` on `fetch_candles` — pages
-  transparently over each adapter's `_fetch_candles_page` hook, dedupes and
-  sorts by timestamp.
+- Candle pagination via `since=`/`until=` on `fetch_candles` — pages over each
+  adapter's `_fetch_candles_page` hook, dedupes, sorts ascending and cuts at
+  `until`. The page walk follows `BaseExchange.candle_paging`, set per venue
+  from a live probe rather than from the docs: **forward** (cursor is `since`,
+  oldest slice first) on Binance spot/linear; **backward** (cursor is `until`
+  or the venue's "now", newest slice first) on Upbit/Bithumb (`to`), Korbit
+  (`end`), OKX (`after`), Bitget spot+mix (`endTime`) and Bybit (`end`).
+  Page limit is 200 bars everywhere except OKX (100). Verified live on
+  2026-08-30 across all 11 exchange/market-type surfaces: 1h bars over 15 days
+  = 360/360, 1d bars over 300 days = 300/300, ascending, no duplicates
+  (`pytest -m live tests/live -k pagination`).
 - Canonical symbol notation everywhere: spot `BASE/QUOTE`, linear perpetual
   `BASE/QUOTE:SETTLE` (`pycex.symbols.parse_symbol`/`Symbol`).
 - Unified `sandbox: bool` flag on every adapter constructor, replacing the
@@ -46,7 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `aggregate_balance` tools.
 - New unified Pydantic models: `Market`, `MyTrade`, `Position`, `FundingRate`.
 - Live smoke test suite (`@pytest.mark.live`, `tests/live/`) exercising
-  public/authenticated endpoints on real exchange APIs across 9
+  public/authenticated endpoints on real exchange APIs across all 11
   exchange/market-type surfaces, plus a `nightly-live` GitHub Actions
   workflow (`workflow_dispatch` + daily cron, no secrets required for the
   public-surface subset).
@@ -102,6 +110,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Hong Kong time (UTC+8), not UTC — every daily bar landed 8 hours off the
   `Candle.timestamp` = UTC-midnight contract. Fixed by requesting the
   `...utc`-suffixed granularity (`1Dutc`) on both.
+- **All seven adapters**: `fetch_candles(since=..., until=...)` silently
+  truncated any range longer than one page on every venue except Binance —
+  the page walk assumed a forward `since` cursor, which five of the seven
+  ignore. Requesting 500 daily bars returned 200 (Upbit, Korbit), 100 (OKX)
+  or 199 (Bybit). See the `candle_paging` entry under Added.
+- **Bithumb**: `fetch_candles(since=..., until=...)` raised `TypeError` — the
+  `to` cursor was sent with a `Z` suffix, which Bithumb rejects (HTTP 200 +
+  `{"error":{"name":400,...}}`); it reads `to` as naive **KST** where Upbit
+  reads it as **UTC**. The formatter is now a per-exchange hook.
+- **Upbit, Bithumb**: neither could raise a `PyCexError` for a bad request.
+  Bithumb serves error envelopes with HTTP **200**, which never reached the
+  error mapper (`fetch_ticker("NOPE/KRW")` died with `KeyError`), and both
+  return an **integer** `error.name` for an unknown market, which the mapper's
+  substring test blew up on (`TypeError: argument of type 'int' is not
+  iterable`). Envelopes are now checked on every response of any status, and
+  an unknown market raises `SymbolNotFoundError`.
+- **Binance**: public `fetch_trades` reported the maker side —
+  `isBuyerMaker=true` means the taker **sold**. Every other adapter reports
+  the taker side.
+- **Bybit**: `fetch_candles(symbol, tf, limit=n)` returned bars newest-first
+  while every other adapter returned them ascending.
+- **Bitget**: the spot candle page was returned unsorted (the mix page was
+  sorted), so bar ordering depended on `market_type`.
+- **OKX**: an empty `data` array raised `IndexError` on `fetch_ticker` and
+  returned an empty order book on `fetch_order_book`; both raise
+  `ExchangeError` now.
+- `close_sync()` / `with Exchange() as ex:` closed an unused sync HTTP client
+  and left the async client — the one every `*_sync` wrapper actually drives —
+  open. The dead sync client and its `sync_get`/`sync_post`/`sync_delete`
+  methods are gone.
+- CLI/MCP help advertised exchange-native symbol examples (`BTCUSDT`), which
+  v0.2 rejects; `Balance.raw` on bare-list balance endpoints carried a
+  fabricated `{"balances": ...}` envelope; only 4 of the 12 models were
+  re-exported from the package root.
 - `mcp` dependency pinned to `mcp[cli]>=1.0.0,<2` to avoid an untested major
   version.
 

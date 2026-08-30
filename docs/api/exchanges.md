@@ -655,7 +655,7 @@ Korbit(
 ## Daily-Bar Boundaries and Live-Smoke Notes (Task 13, 2026-08-30)
 
 `fetch_candles(symbol, "1d", ...)`'s bar-open timestamp lands on a different
-wall-clock boundary depending on the venue. All nine exchange/market-type
+wall-clock boundary depending on the venue. All eleven exchange/market-type
 surfaces below were exercised live (`pytest -m live tests/live`) against
 real public endpoints from `mwork2`; `tests/live/test_smoke.py` asserts the
 boundary in the `expected_offset` column programmatically (`c.timestamp %
@@ -667,6 +667,7 @@ boundary in the `expected_offset` column programmatically (`c.timestamp %
 | Bithumb | spot | 00:00 KST (15:00 UTC previous day) | `54_000_000` |
 | Korbit | spot | 00:00 KST (15:00 UTC previous day) | `54_000_000` |
 | Binance | spot, linear | 00:00 UTC | `0` |
+| Bybit | spot, linear | 00:00 UTC | `0` |
 | OKX | spot, linear | 00:00 UTC (**only** with `bar=1Dutc`; the bare `bar=1D` this adapter used before Task 13 aligns to Hong Kong time, UTC+8) | `0` |
 | Bitget | spot, linear | 00:00 UTC (**only** with `granularity=1Dutc`; the bare `granularity=1day`/`1Dutc` for mix already matched, but spot used `1day` before Task 13, same UTC+8 bug as OKX) | `0` |
 
@@ -687,18 +688,23 @@ unit tests `test_fetch_candles_page_daily_uses_utc_suffixed_bar` (OKX) /
 
 Other live-observed behavior, no code changes needed:
 
-- All nine surfaces' `fetch_order_book` returned a non-empty book (≥1 bid,
+- All eleven surfaces' `fetch_order_book` returned a non-empty book (≥1 bid,
   ≥1 ask) for `BTC/KRW`/`BTC/USDT`(`:USDT`) — no venue returned an empty book
   for this liquid pair at test time.
-- All nine surfaces' `fetch_trades(limit=5)` returned exactly 5 recent
-  trades; none of the six global/linear surfaces or three KRW spot surfaces
+- All eleven surfaces' `fetch_trades(limit=5)` returned exactly 5 recent
+  trades; none of the eight global/linear surfaces or three KRW spot surfaces
   hit a rate limit during the smoke run (single request per surface, no
   retries observed).
-- The pagination path (`fetch_candles` with `since=`/`until=` spanning 10
-  days) was verified on one venue per family — `binance` (`linear`),
-  `upbit` (`spot`), `korbit` (`spot`) — returning 9–11 strictly ascending,
-  duplicate-free daily bars in each case (`BaseExchange.fetch_candles`'s
-  cursor/dedup logic, unchanged by this task).
+- 🚨 The pagination claim this section used to make was worthless: a 10-day
+  span of daily bars fits in a **single page** on every venue, so it passed
+  while five of the seven adapters truncated every real multi-page range
+  (2026-08-30, 500 daily bars requested: Upbit 200, Korbit 200, OKX 100,
+  Bybit 199). The live case now spans more bars than one page on the venue it
+  runs against — 1h bars over 15 days (360 bars, page limit 200 / OKX 100) on
+  all ten global+KRW surfaces, and 1d bars over 300 days on Bithumb — and all
+  eleven surfaces return the exact bar count, strictly ascending and
+  duplicate-free. Per-venue paging direction (`BaseExchange.candle_paging`)
+  and cursor parameters are tabulated in `README.md`.
 
 ## Unified Interface (BaseExchange)
 
