@@ -177,6 +177,9 @@ def test_parse_candle_swap_array_shape() -> None:
     assert c.timestamp == int(raw[0])
     assert c.open == float(raw[1])
     assert c.volume == float(raw[5])
+    # Recorded with bar=1Dutc (Task 13 fix) — must land on UTC midnight, not
+    # the Hong Kong midnight the bare bar=1D produces (offset 57_600_000).
+    assert c.timestamp % 86_400_000 == 0
 
 
 async def test_fetch_candles_page_linear_sorts_ascending(httpx_mock: HTTPXMock) -> None:
@@ -186,8 +189,8 @@ async def test_fetch_candles_page_linear_sorts_ascending(httpx_mock: HTTPXMock) 
     req = httpx_mock.get_request()
     assert req.url.path == "/api/v5/market/candles"
     assert [c.timestamp for c in candles] == sorted(c.timestamp for c in candles)
-    assert candles[0].timestamp == 1787846400000  # oldest of the three fixture rows
-    assert candles[-1].timestamp == 1788019200000  # newest
+    assert candles[0].timestamp == 1787875200000  # oldest of the three fixture rows
+    assert candles[-1].timestamp == 1788048000000  # newest
     await ex.close()
 
 
@@ -208,7 +211,7 @@ async def test_candles_history_fallback_on_empty_regular_response(httpx_mock: HT
     httpx_mock.add_response(json={"code": "0", "msg": "", "data": []})
     httpx_mock.add_response(json=load_fixture("okx", "candles_swap_1d"))
     ex = OKX(market_type="linear")
-    since = 1787846400000
+    since = 1787875200000
     candles = await ex._fetch_candles_page("BTC-USDT-SWAP", "1d", since=since, until=None, limit=100)
     reqs = httpx_mock.get_requests()
     assert len(reqs) == 2
@@ -228,7 +231,7 @@ async def test_fetch_candles_page_clamps_limit_to_100(httpx_mock: HTTPXMock) -> 
     httpx_mock.add_response(json={"code": "0", "msg": "", "data": []})
     ex = OKX(market_type="linear")
     assert ex.candle_page_limit == 100
-    await ex._fetch_candles_page("BTC-USDT-SWAP", "1d", since=1787846400000, until=None, limit=200)
+    await ex._fetch_candles_page("BTC-USDT-SWAP", "1d", since=1787875200000, until=None, limit=200)
     reqs = httpx_mock.get_requests()
     assert reqs[0].url.params["limit"] == "100"
     assert reqs[1].url.params["limit"] == "100"

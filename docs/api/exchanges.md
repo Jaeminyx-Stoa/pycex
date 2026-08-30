@@ -669,9 +669,11 @@ used the correct `"1Dutc"`) both requested the bare `"1D"`/`"1day"`
 granularity, which both exchanges align to **Hong Kong time (UTC+8)**, not
 UTC — live-diffing `bar=1D` vs `bar=1Dutc` on the same OKX instrument showed
 timestamps exactly `28_800_000`ms (8h) apart, and the same diff reproduced
-on Bitget spot's `granularity=1day` vs `1Dutc`. Fixed by mapping `"1d"` (and
-`"1w"`) to the `"...utc"`-suffixed granularity in both adapters
-(`src/pycex/exchanges/okx.py`, `src/pycex/exchanges/bitget.py`); see the
+on Bitget spot's `granularity=1day` vs `1Dutc`. Fixed by mapping `"1d"` to
+the `"...utc"`-suffixed granularity in both adapters (`"1w"` is left as the
+bare form — it is outside this library's timeframe contract
+(`BaseExchange.supported_timeframes` is `1m/5m/15m/1h/4h/1d` only) and its
+Hong-Kong-time behavior was not live-verified); see the
 `_TIMEFRAME_MAP` docstring comments in each file and the mutation-verified
 unit tests `test_fetch_candles_page_daily_uses_utc_suffixed_bar` (OKX) /
 `test_fetch_candles_page_spot_daily_uses_utc_suffixed_granularity` (Bitget).

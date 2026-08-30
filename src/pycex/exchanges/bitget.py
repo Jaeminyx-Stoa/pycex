@@ -130,13 +130,17 @@ from pycex.symbols import MarketType, parse_symbol
 from pycex.symbols import linear as make_linear_symbol
 from pycex.symbols import spot as make_spot_symbol
 
-# 🚨 Live-verified 2026-08-30: Bitget spot's plain "1day"/"1week" bars align to
-# Hong Kong time (UTC+8), same trap as OKX's bare "1D" — `granularity=1day`
+# 🚨 Live-verified 2026-08-30: Bitget spot's plain "1day" bar aligns to Hong
+# Kong time (UTC+8), same trap as OKX's bare "1D" — `granularity=1day`
 # returns bars exactly 28_800_000ms (8h) earlier than `granularity=1Dutc` for
 # the same symbol (diffed live: 1day gives ts=1788019200000, 1Dutc gives
-# ts=1788048000000). Spot supports the same "*utc" suffix family as mix, so
-# daily (and weekly) bars use it here too, matching this library's
-# UTC-epoch-ms bar-open contract.
+# ts=1788048000000; re-confirmed against the re-recorded fixture
+# tests/fixtures/bitget/candles_linear_1d.json, see tests/fixtures/NOTES.md).
+# Spot supports the same "*utc" suffix family as mix, so daily bars use it
+# here too, matching this library's UTC-epoch-ms bar-open contract. "1w" is
+# left as the bare "1week" — it is not in BaseExchange.supported_timeframes
+# (this library's timeframe contract is 1m/5m/15m/1h/4h/1d only) and its
+# Hong-Kong-time behavior was not live-verified in this pass.
 _TIMEFRAME_MAP = {
     "1m": "1min",
     "5m": "5min",
@@ -145,7 +149,7 @@ _TIMEFRAME_MAP = {
     "1h": "1h",
     "4h": "4h",
     "1d": "1Dutc",
-    "1w": "1Wutc",
+    "1w": "1week",
 }
 
 # Confirmed via ccxt's swap timeframe table (see module docstring) — "1Dutc"

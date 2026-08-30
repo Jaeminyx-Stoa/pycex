@@ -184,6 +184,10 @@ def test_parse_candle_mix_array_shape() -> None:
     assert c.timestamp == int(raw[0])
     assert c.open == float(raw[1])
     assert c.volume == float(raw[5])
+    # Recorded with granularity=1Dutc (Task 13 fix) — must land on UTC
+    # midnight, not the Hong Kong midnight the bare granularity=1D/1day
+    # produces (offset 57_600_000).
+    assert c.timestamp % 86_400_000 == 0
 
 
 async def test_fetch_candles_page_spot_daily_uses_utc_suffixed_granularity(httpx_mock: HTTPXMock) -> None:
@@ -205,13 +209,13 @@ async def test_fetch_candles_page_spot_daily_uses_utc_suffixed_granularity(httpx
 async def test_fetch_candles_page_linear_sends_product_type_granularity_and_range(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(json=load_fixture("bitget", "candles_linear_1d"))
     ex = Bitget(market_type="linear")
-    candles = await ex._fetch_candles_page("BTCUSDT", "1d", since=1787846400000, until=1788019200000, limit=1000)
+    candles = await ex._fetch_candles_page("BTCUSDT", "1d", since=1787875200000, until=1788048000000, limit=1000)
     req = httpx_mock.get_request()
     assert req.url.path == "/api/v2/mix/market/candles"
     assert req.url.params["productType"] == "USDT-FUTURES"
     assert req.url.params["granularity"] == "1Dutc"
-    assert req.url.params["startTime"] == "1787846400000"
-    assert req.url.params["endTime"] == "1788019200000"
+    assert req.url.params["startTime"] == "1787875200000"
+    assert req.url.params["endTime"] == "1788048000000"
     # limit clamped to 200 (the tighter of "recent" (1000) vs "history" (200) caps)
     assert req.url.params["limit"] == "200"
     assert [c.timestamp for c in candles] == sorted(c.timestamp for c in candles)

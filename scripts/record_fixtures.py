@@ -60,7 +60,13 @@ TARGETS = [
         "okx",
         "candles_swap_1d",
         "https://www.okx.com/api/v5/market/candles",
-        {"instId": "BTC-USDT-SWAP", "bar": "1D", "limit": 3},
+        # bar="1D" (bare) aligns to Hong Kong time (UTC+8), not UTC — this
+        # library's Candle.timestamp contract is UTC-epoch-ms bar-open, and
+        # the OKX adapter itself requests "1Dutc" for "1d" (see
+        # src/pycex/exchanges/okx.py::_TIMEFRAME_MAP, fixed in Task 13 after a
+        # live smoke defect). The fixture must match what the adapter
+        # actually sends.
+        {"instId": "BTC-USDT-SWAP", "bar": "1Dutc", "limit": 3},
         0,
     ),
     ("okx", "funding", "https://www.okx.com/api/v5/public/funding-rate", {"instId": "BTC-USDT-SWAP"}, 0),
@@ -76,7 +82,11 @@ TARGETS = [
         "bitget",
         "candles_linear_1d",
         "https://api.bitget.com/api/v2/mix/market/candles",
-        {"symbol": "BTCUSDT", "productType": "USDT-FUTURES", "granularity": "1D", "limit": 3},
+        # granularity="1D" (bare) aligns to Hong Kong time (UTC+8), not UTC —
+        # the mix adapter itself requests "1Dutc" for "1d"
+        # (src/pycex/exchanges/bitget.py::_MIX_TIMEFRAME_MAP); the fixture
+        # must match what the adapter actually sends.
+        {"symbol": "BTCUSDT", "productType": "USDT-FUTURES", "granularity": "1Dutc", "limit": 3},
         0,
     ),
     (

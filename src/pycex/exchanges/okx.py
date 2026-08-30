@@ -91,13 +91,18 @@ from pycex.symbols import MarketType, parse_symbol
 from pycex.symbols import linear as make_linear_symbol
 from pycex.symbols import spot as make_spot_symbol
 
-# 🚨 Live-verified 2026-08-30: OKX's plain "1D"/"1W"/"1M" bars align to Hong
-# Kong time (UTC+8), NOT UTC midnight — `bar=1D` returns bars 8h offset from
+# 🚨 Live-verified 2026-08-30: OKX's plain "1D" bar aligns to Hong Kong time
+# (UTC+8), NOT UTC midnight — `bar=1D` returns bars 8h offset from
 # `bar=1Dutc` for the same instrument (confirmed by diffing the two live:
 # 1D gives ts=1788019200000, 1Dutc gives ts=1788048000000, exactly 28_800_000ms
-# = 8h apart). This library's candle contract is UTC-epoch-ms bar-open, so
-# daily (and weekly) bars must request the "utc"-suffixed granularity instead
-# of the bare one a naive reading of the docs would suggest.
+# = 8h apart; re-confirmed against the re-recorded fixture
+# tests/fixtures/okx/candles_swap_1d.json, see tests/fixtures/NOTES.md). This
+# library's candle contract is UTC-epoch-ms bar-open, so daily bars must
+# request the "utc"-suffixed granularity instead of the bare one a naive
+# reading of the docs would suggest. "1w" is left as the bare "1W" — it is
+# not in BaseExchange.supported_timeframes (this library's timeframe
+# contract is 1m/5m/15m/1h/4h/1d only) and its Hong-Kong-time behavior was
+# not live-verified in this pass.
 _TIMEFRAME_MAP = {
     "1m": "1m",
     "5m": "5m",
@@ -105,7 +110,7 @@ _TIMEFRAME_MAP = {
     "1h": "1H",
     "4h": "4H",
     "1d": "1Dutc",
-    "1w": "1Wutc",
+    "1w": "1W",
 }
 
 
