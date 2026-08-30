@@ -8,15 +8,18 @@ from urllib.parse import urlencode
 
 from pycex.auth import bitget_headers
 from pycex.base import BaseExchange
-from pycex.constants import BITGET_BASE, BITGET_BROKER_ID
-from pycex.exceptions import ExchangeError
+from pycex.constants import BITGET_BASE, BITGET_BROKER_ID, QUOTE_SUFFIXES
+from pycex.exceptions import ExchangeError, NotSupportedError, SymbolNotFoundError
 from pycex.http import HTTPClient
 from pycex.models.balance import Balance, BalanceEntry
 from pycex.models.candle import Candle
+from pycex.models.market import Market
+from pycex.models.mytrade import MyTrade
 from pycex.models.order import Order
 from pycex.models.orderbook import OrderBook, OrderBookEntry
 from pycex.models.ticker import Ticker
 from pycex.models.trade import Trade
+from pycex.symbols import MarketType, parse_symbol
 
 _TIMEFRAME_MAP = {
     "1m": "1min",
@@ -46,17 +49,33 @@ class Bitget(BaseExchange):
         secret: str = "",
         passphrase: str = "",
         *,
-        demo: bool = False,
+        sandbox: bool = False,
+        market_type: MarketType = "spot",
+        demo: bool | None = None,
         timeout: float = 30.0,
     ) -> None:
         self._api_key = api_key
         self._secret = secret
         self._passphrase = passphrase
-        self._demo = demo
+        self.market_type = market_type
+        self.sandbox = self._resolve_sandbox(sandbox, None, demo)
+        self._markets: dict[str, Market] = {}
         broker_headers: dict[str, str] = {}
         if BITGET_BROKER_ID:
             broker_headers["X-CHANNEL-API-CODE"] = BITGET_BROKER_ID
         self._http = HTTPClient(BITGET_BASE, timeout=timeout, rate=10.0, default_headers=broker_headers)
+
+    def to_native(self, symbol: str) -> str:
+        sym = parse_symbol(symbol)
+        return f"{sym.base}{sym.quote}"
+
+    def from_native(self, native: str) -> str:
+        if native in self._markets:
+            return self._markets[native].symbol
+        for quote in QUOTE_SUFFIXES:
+            if native.endswith(quote) and len(native) > len(quote):
+                return f"{native[: -len(quote)]}/{quote}"
+        raise SymbolNotFoundError(f"cannot resolve native symbol {native!r} for {self.name}")
 
     def _check(self, data: dict[str, Any]) -> list[Any]:
         # Bitget wraps success as code "00000"; auth/API errors arrive as HTTP 200 + non-zero code.
@@ -67,10 +86,10 @@ class Bitget(BaseExchange):
         return result if isinstance(result, list) else [result]
 
     def _signed_get(self, path: str) -> dict[str, str]:
-        return bitget_headers(self._api_key, self._secret, self._passphrase, "GET", path, "", demo=self._demo)
+        return bitget_headers(self._api_key, self._secret, self._passphrase, "GET", path, "", demo=self.sandbox)
 
     def _signed_post(self, path: str, body: str) -> dict[str, str]:
-        return bitget_headers(self._api_key, self._secret, self._passphrase, "POST", path, body, demo=self._demo)
+        return bitget_headers(self._api_key, self._secret, self._passphrase, "POST", path, body, demo=self.sandbox)
 
     @staticmethod
     def _path(path: str, params: dict[str, Any] | None) -> str:
@@ -87,14 +106,27 @@ class Bitget(BaseExchange):
         data = await self._http.get("/api/v2/spot/market/orderbook", params={"symbol": symbol, "limit": limit})
         return _parse_order_book(symbol, self._check(data)[0])
 
-    async def fetch_candles(self, symbol: str, timeframe: str = "1h", *, limit: int = 100) -> list[Candle]:
-        params = {"symbol": symbol, "granularity": _TIMEFRAME_MAP.get(timeframe, timeframe), "limit": limit}
+    async def _fetch_candles_page(
+        self, native: str, timeframe: str, *, since: int | None, until: int | None, limit: int
+    ) -> list[Candle]:
+        params: dict[str, Any] = {
+            "symbol": native,
+            "granularity": _TIMEFRAME_MAP.get(timeframe, timeframe),
+            "limit": limit,
+        }
+        if since is not None:
+            params["startTime"] = since
+        if until is not None:
+            params["endTime"] = until
         data = await self._http.get("/api/v2/spot/market/candles", params=params)
         return [_parse_candle(k) for k in self._check(data)]
 
     async def fetch_trades(self, symbol: str, *, limit: int = 100) -> list[Trade]:
         data = await self._http.get("/api/v2/spot/market/fills", params={"symbol": symbol, "limit": limit})
         return [_parse_trade(t) for t in self._check(data)]
+
+    async def fetch_markets(self) -> list[Market]:
+        raise NotSupportedError("bitget.fetch_markets is not implemented yet")
 
     # ── Account ──
 
@@ -153,62 +185,10 @@ class Bitget(BaseExchange):
         data = await self._http.get(path, headers=self._signed_get(path))
         return [_parse_order(o) for o in self._check(data)]
 
-    # ── Sync ──
-
-    def fetch_ticker_sync(self, symbol: str) -> Ticker:
-        data = self._http.sync_get("/api/v2/spot/market/tickers", params={"symbol": symbol})
-        return _parse_ticker(self._check(data)[0])
-
-    def fetch_order_book_sync(self, symbol: str, *, limit: int = 20) -> OrderBook:
-        data = self._http.sync_get("/api/v2/spot/market/orderbook", params={"symbol": symbol, "limit": limit})
-        return _parse_order_book(symbol, self._check(data)[0])
-
-    def fetch_candles_sync(self, symbol: str, timeframe: str = "1h", *, limit: int = 100) -> list[Candle]:
-        params = {"symbol": symbol, "granularity": _TIMEFRAME_MAP.get(timeframe, timeframe), "limit": limit}
-        data = self._http.sync_get("/api/v2/spot/market/candles", params=params)
-        return [_parse_candle(k) for k in self._check(data)]
-
-    def fetch_balance_sync(self) -> Balance:
-        path = "/api/v2/spot/account/assets"
-        data = self._http.sync_get(path, headers=self._signed_get(path))
-        return _parse_balance(self._check(data), data)
-
-    def create_order_sync(
-        self, symbol: str, side: str, order_type: str, amount: float, price: float | None = None
-    ) -> Order:
-        path = "/api/v2/spot/trade/place-order"
-        body: dict[str, Any] = {
-            "symbol": symbol,
-            "side": side.lower(),
-            "orderType": "limit" if order_type.lower() == "limit" else "market",
-            "size": str(amount),
-        }
-        if order_type.lower() == "limit":
-            body["force"] = "gtc"
-            if price is not None:
-                body["price"] = str(price)
-        body_str = json.dumps(body)
-        data = self._http.sync_post(path, data=body, headers=self._signed_post(path, body_str))
-        r = self._check(data)
-        first = r[0] if r else {}
-        return Order(
-            id=first.get("orderId", ""),
-            symbol=symbol,
-            side=side.lower(),
-            type=order_type.lower(),
-            amount=amount,
-            price=price,
-            raw=data,
-        )
-
-    def cancel_order_sync(self, order_id: str, symbol: str) -> Order:
-        path = "/api/v2/spot/trade/cancel-order"
-        body = {"symbol": symbol, "orderId": order_id}
-        body_str = json.dumps(body)
-        data = self._http.sync_post(path, data=body, headers=self._signed_post(path, body_str))
-        r = self._check(data)
-        first = r[0] if r else {}
-        return Order(id=first.get("orderId", order_id), symbol=symbol, side="", type="", amount=0, raw=data)
+    async def fetch_my_trades(
+        self, symbol: str | None = None, *, since: int | None = None, limit: int | None = None
+    ) -> list[MyTrade]:
+        raise NotSupportedError("bitget.fetch_my_trades is not implemented yet")
 
 
 # ── Parsers ──

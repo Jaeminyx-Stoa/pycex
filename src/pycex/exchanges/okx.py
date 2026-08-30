@@ -8,14 +8,17 @@ from typing import Any
 from pycex.auth import okx_headers
 from pycex.base import BaseExchange
 from pycex.constants import OKX_BASE, OKX_BROKER_ID
-from pycex.exceptions import ExchangeError
+from pycex.exceptions import ExchangeError, NotSupportedError, SymbolNotFoundError
 from pycex.http import HTTPClient
 from pycex.models.balance import Balance, BalanceEntry
 from pycex.models.candle import Candle
+from pycex.models.market import Market
+from pycex.models.mytrade import MyTrade
 from pycex.models.order import Order
 from pycex.models.orderbook import OrderBook, OrderBookEntry
 from pycex.models.ticker import Ticker
 from pycex.models.trade import Trade
+from pycex.symbols import MarketType, parse_symbol
 
 _TIMEFRAME_MAP = {
     "1m": "1m",
@@ -37,17 +40,38 @@ class OKX(BaseExchange):
         secret: str = "",
         passphrase: str = "",
         *,
-        demo: bool = False,
+        sandbox: bool = False,
+        market_type: MarketType = "spot",
+        demo: bool | None = None,
         timeout: float = 30.0,
     ) -> None:
         self._api_key = api_key
         self._secret = secret
         self._passphrase = passphrase
-        self._demo = demo
+        self.market_type = market_type
+        self.sandbox = self._resolve_sandbox(sandbox, None, demo)
+        self._markets: dict[str, Market] = {}
         broker_headers: dict[str, str] = {}
         if OKX_BROKER_ID:
             broker_headers["broker-id"] = OKX_BROKER_ID
         self._http = HTTPClient(OKX_BASE, timeout=timeout, rate=10.0, default_headers=broker_headers)
+
+    def to_native(self, symbol: str) -> str:
+        sym = parse_symbol(symbol)
+        if sym.settle:
+            return f"{sym.base}-{sym.quote}-SWAP"
+        return f"{sym.base}-{sym.quote}"
+
+    def from_native(self, native: str) -> str:
+        if native in self._markets:
+            return self._markets[native].symbol
+        parts = native.split("-")
+        if len(parts) < 2:
+            raise SymbolNotFoundError(f"cannot resolve native symbol {native!r} for {self.name}")
+        base, quote = parts[0], parts[1]
+        if len(parts) >= 3 and parts[2] == "SWAP":
+            return f"{base}/{quote}:USDT"
+        return f"{base}/{quote}"
 
     def _check(self, data: dict[str, Any]) -> list[Any]:
         code = data.get("code", "0")
@@ -58,7 +82,7 @@ class OKX(BaseExchange):
 
     def _auth_headers(self, method: str, path: str, body: str = "") -> dict[str, str]:
         headers = okx_headers(self._api_key, self._secret, self._passphrase, method, path, body)
-        if self._demo:
+        if self.sandbox:
             headers["x-simulated-trading"] = "1"
         return headers
 
@@ -74,8 +98,18 @@ class OKX(BaseExchange):
         result = self._check(data)
         return _parse_order_book(symbol, result[0] if result else {})
 
-    async def fetch_candles(self, symbol: str, timeframe: str = "1h", *, limit: int = 100) -> list[Candle]:
-        params = {"instId": symbol, "bar": _TIMEFRAME_MAP.get(timeframe, timeframe), "limit": str(limit)}
+    async def _fetch_candles_page(
+        self, native: str, timeframe: str, *, since: int | None, until: int | None, limit: int
+    ) -> list[Candle]:
+        params: dict[str, Any] = {
+            "instId": native,
+            "bar": _TIMEFRAME_MAP.get(timeframe, timeframe),
+            "limit": str(limit),
+        }
+        if since is not None:
+            params["after"] = str(since - 1)
+        if until is not None:
+            params["before"] = str(until + 1)
         data = await self._http.get("/api/v5/market/candles", params=params)
         result = self._check(data)
         return [_parse_candle(k) for k in result]
@@ -84,6 +118,9 @@ class OKX(BaseExchange):
         data = await self._http.get("/api/v5/market/trades", params={"instId": symbol, "limit": str(limit)})
         result = self._check(data)
         return [_parse_trade(t) for t in result]
+
+    async def fetch_markets(self) -> list[Market]:
+        raise NotSupportedError("okx.fetch_markets is not implemented yet")
 
     # ── Account ──
 
@@ -157,67 +194,10 @@ class OKX(BaseExchange):
         result = self._check(data)
         return [_parse_order(o) for o in result]
 
-    # ── Sync ──
-
-    def fetch_ticker_sync(self, symbol: str) -> Ticker:
-        data = self._http.sync_get("/api/v5/market/ticker", params={"instId": symbol})
-        result = self._check(data)
-        return _parse_ticker(result[0])
-
-    def fetch_candles_sync(self, symbol: str, timeframe: str = "1h", *, limit: int = 100) -> list[Candle]:
-        params = {"instId": symbol, "bar": _TIMEFRAME_MAP.get(timeframe, timeframe), "limit": str(limit)}
-        data = self._http.sync_get("/api/v5/market/candles", params=params)
-        result = self._check(data)
-        return [_parse_candle(k) for k in result]
-
-    def fetch_order_book_sync(self, symbol: str, *, limit: int = 20) -> OrderBook:
-        data = self._http.sync_get("/api/v5/market/books", params={"instId": symbol, "sz": limit})
-        result = self._check(data)
-        return _parse_order_book(symbol, result[0] if result else {})
-
-    def fetch_balance_sync(self) -> Balance:
-        path = "/api/v5/account/balance"
-        data = self._http.sync_get(path, headers=self._auth_headers("GET", path))
-        result = self._check(data)
-        return _parse_balance(result, data)
-
-    def create_order_sync(
-        self, symbol: str, side: str, order_type: str, amount: float, price: float | None = None
-    ) -> Order:
-        path = "/api/v5/trade/order"
-        body: dict[str, Any] = {
-            "instId": symbol,
-            "tdMode": "cash",
-            "side": side.lower(),
-            "ordType": "limit" if order_type.lower() == "limit" else "market",
-            "sz": str(amount),
-        }
-        if OKX_BROKER_ID:
-            body["tag"] = OKX_BROKER_ID
-        if price is not None:
-            body["px"] = str(price)
-        body_str = json.dumps(body)
-        data = self._http.sync_post(path, data=body, headers=self._auth_headers("POST", path, body_str))
-        result = self._check(data)
-        r = result[0] if result else {}
-        return Order(
-            id=r.get("ordId", ""),
-            symbol=symbol,
-            side=side.lower(),
-            type=order_type.lower(),
-            amount=amount,
-            price=price,
-            raw=data,
-        )
-
-    def cancel_order_sync(self, order_id: str, symbol: str) -> Order:
-        path = "/api/v5/trade/cancel-order"
-        body = {"instId": symbol, "ordId": order_id}
-        body_str = json.dumps(body)
-        data = self._http.sync_post(path, data=body, headers=self._auth_headers("POST", path, body_str))
-        result = self._check(data)
-        r = result[0] if result else {}
-        return Order(id=r.get("ordId", order_id), symbol=symbol, side="", type="", amount=0, raw=data)
+    async def fetch_my_trades(
+        self, symbol: str | None = None, *, since: int | None = None, limit: int | None = None
+    ) -> list[MyTrade]:
+        raise NotSupportedError("okx.fetch_my_trades is not implemented yet")
 
 
 # ── Parsers ──

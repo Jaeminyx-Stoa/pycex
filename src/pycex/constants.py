@@ -33,6 +33,12 @@ BYBIT_REFERRAL_CODE = ""
 OKX_BROKER_ID = ""
 BITGET_BROKER_ID = ""  # X-CHANNEL-API-CODE for API broker rebate
 
+# ── Symbol resolution ──
+# Quote-asset suffixes tried (longest-match-first is not required here since
+# each candidate is checked in this fixed priority order) when an adapter has
+# no markets cache yet to resolve a native symbol back to canonical notation.
+QUOTE_SUFFIXES: tuple[str, ...] = ("USDT", "USDC", "BTC", "ETH", "BNB", "FDUSD", "KRW")
+
 # ── Timeframes ──
 TIMEFRAME_1m = "1m"
 TIMEFRAME_5m = "5m"

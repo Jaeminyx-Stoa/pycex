@@ -14,8 +14,15 @@ class TestBinanceInit:
         assert ex.name == "binance"
         assert ex._http._base_url == BINANCE_BASE
 
-    def test_testnet(self) -> None:
-        ex = Binance(api_key="k", secret="s", testnet=True)
+    def test_testnet_deprecated(self) -> None:
+        with pytest.deprecated_call():
+            ex = Binance(api_key="k", secret="s", testnet=True)
+        assert ex.sandbox is True
+        assert ex._http._base_url == BINANCE_TESTNET
+
+    def test_sandbox(self) -> None:
+        ex = Binance(api_key="k", secret="s", sandbox=True)
+        assert ex.sandbox is True
         assert ex._http._base_url == BINANCE_TESTNET
 
     def test_context_manager(self) -> None:
@@ -39,12 +46,23 @@ class TestBybitInit:
         assert ex.name == "bybit"
         assert ex._http._base_url == BYBIT_BASE
 
-    def test_testnet(self) -> None:
-        ex = Bybit(api_key="k", secret="s", testnet=True)
+    def test_testnet_deprecated(self) -> None:
+        with pytest.deprecated_call():
+            ex = Bybit(api_key="k", secret="s", testnet=True)
+        assert ex.sandbox is True
+        assert ex._http._base_url == BYBIT_TESTNET
+
+    def test_sandbox(self) -> None:
+        ex = Bybit(api_key="k", secret="s", sandbox=True)
+        assert ex.sandbox is True
         assert ex._http._base_url == BYBIT_TESTNET
 
     def test_category(self) -> None:
         ex = Bybit(api_key="k", secret="s", category="linear")
+        assert ex._category == "linear"
+
+    def test_market_type_linear_maps_to_category(self) -> None:
+        ex = Bybit(api_key="k", secret="s", market_type="linear")
         assert ex._category == "linear"
 
 
@@ -97,7 +115,7 @@ class TestBybitResponseParsing:
             }
         )
         async with Bybit(api_key="k", secret="s") as ex:
-            candles = await ex.fetch_candles("BTCUSDT")
+            candles = await ex.fetch_candles("BTC/USDT")
         assert len(candles) == 1
         assert candles[0].close == 65500.0
 
@@ -107,11 +125,16 @@ class TestOKXInit:
         ex = OKX(api_key="k", secret="s", passphrase="p")
         assert ex.name == "okx"
         assert ex._http._base_url == OKX_BASE
-        assert not ex._demo
+        assert not ex.sandbox
 
-    def test_demo(self) -> None:
-        ex = OKX(api_key="k", secret="s", passphrase="p", demo=True)
-        assert ex._demo
+    def test_demo_deprecated(self) -> None:
+        with pytest.deprecated_call():
+            ex = OKX(api_key="k", secret="s", passphrase="p", demo=True)
+        assert ex.sandbox is True
+
+    def test_sandbox(self) -> None:
+        ex = OKX(api_key="k", secret="s", passphrase="p", sandbox=True)
+        assert ex.sandbox is True
 
 
 class TestBitgetInit:
@@ -119,8 +142,13 @@ class TestBitgetInit:
         ex = Bitget(api_key="k", secret="s", passphrase="p")
         assert ex.name == "bitget"
         assert ex._http._base_url == BITGET_BASE
-        assert not ex._demo
+        assert not ex.sandbox
 
-    def test_demo(self) -> None:
-        ex = Bitget(api_key="k", secret="s", passphrase="p", demo=True)
-        assert ex._demo
+    def test_demo_deprecated(self) -> None:
+        with pytest.deprecated_call():
+            ex = Bitget(api_key="k", secret="s", passphrase="p", demo=True)
+        assert ex.sandbox is True
+
+    def test_sandbox(self) -> None:
+        ex = Bitget(api_key="k", secret="s", passphrase="p", sandbox=True)
+        assert ex.sandbox is True

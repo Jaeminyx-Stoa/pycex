@@ -7,15 +7,18 @@ from typing import Any
 
 from pycex.auth import bybit_headers
 from pycex.base import BaseExchange
-from pycex.constants import BYBIT_BASE, BYBIT_REFERRAL_CODE, BYBIT_TESTNET
-from pycex.exceptions import ExchangeError
+from pycex.constants import BYBIT_BASE, BYBIT_REFERRAL_CODE, BYBIT_TESTNET, QUOTE_SUFFIXES
+from pycex.exceptions import ExchangeError, NotSupportedError, SymbolNotFoundError
 from pycex.http import HTTPClient
 from pycex.models.balance import Balance, BalanceEntry
 from pycex.models.candle import Candle
+from pycex.models.market import Market
+from pycex.models.mytrade import MyTrade
 from pycex.models.order import Order
 from pycex.models.orderbook import OrderBook, OrderBookEntry
 from pycex.models.ticker import Ticker
 from pycex.models.trade import Trade
+from pycex.symbols import MarketType, parse_symbol
 
 _TIMEFRAME_MAP = {
     "1m": "1",
@@ -38,18 +41,35 @@ class Bybit(BaseExchange):
         api_key: str = "",
         secret: str = "",
         *,
-        testnet: bool = False,
+        sandbox: bool = False,
+        market_type: MarketType = "spot",
+        testnet: bool | None = None,
         timeout: float = 30.0,
-        category: str = "spot",
+        category: str | None = None,
     ) -> None:
         self._api_key = api_key
         self._secret = secret
-        self._category = category
-        base = BYBIT_TESTNET if testnet else BYBIT_BASE
+        self.market_type = market_type
+        self.sandbox = self._resolve_sandbox(sandbox, testnet, None)
+        self._category = category if category is not None else ("linear" if market_type == "linear" else "spot")
+        self._markets: dict[str, Market] = {}
+        base = BYBIT_TESTNET if self.sandbox else BYBIT_BASE
         broker_headers: dict[str, str] = {}
         if BYBIT_REFERRAL_CODE:
             broker_headers["Referer"] = BYBIT_REFERRAL_CODE
         self._http = HTTPClient(base, timeout=timeout, rate=10.0, default_headers=broker_headers)
+
+    def to_native(self, symbol: str) -> str:
+        sym = parse_symbol(symbol)
+        return f"{sym.base}{sym.quote}"
+
+    def from_native(self, native: str) -> str:
+        if native in self._markets:
+            return self._markets[native].symbol
+        for quote in QUOTE_SUFFIXES:
+            if native.endswith(quote) and len(native) > len(quote):
+                return f"{native[: -len(quote)]}/{quote}"
+        raise SymbolNotFoundError(f"cannot resolve native symbol {native!r} for {self.name}")
 
     def _check(self, data: dict[str, Any]) -> dict[str, Any]:
         if data.get("retCode", 0) != 0:
@@ -80,13 +100,19 @@ class Bybit(BaseExchange):
         result = self._check(data)
         return _parse_order_book(symbol, result)
 
-    async def fetch_candles(self, symbol: str, timeframe: str = "1h", *, limit: int = 100) -> list[Candle]:
-        params = {
+    async def _fetch_candles_page(
+        self, native: str, timeframe: str, *, since: int | None, until: int | None, limit: int
+    ) -> list[Candle]:
+        params: dict[str, Any] = {
             "category": self._category,
-            "symbol": symbol,
+            "symbol": native,
             "interval": _TIMEFRAME_MAP.get(timeframe, timeframe),
             "limit": limit,
         }
+        if since is not None:
+            params["start"] = since
+        if until is not None:
+            params["end"] = until
         data = await self._http.get("/v5/market/kline", params=params)
         result = self._check(data)
         return [_parse_candle(k) for k in result.get("list", [])]
@@ -96,6 +122,9 @@ class Bybit(BaseExchange):
         data = await self._http.get("/v5/market/recent-trade", params=params)
         result = self._check(data)
         return [_parse_trade(t) for t in result.get("list", [])]
+
+    async def fetch_markets(self) -> list[Market]:
+        raise NotSupportedError("bybit.fetch_markets is not implemented yet")
 
     # ── Account ──
 
@@ -157,68 +186,10 @@ class Bybit(BaseExchange):
         result = self._check(data)
         return [_parse_order(o) for o in result.get("list", [])]
 
-    # ── Sync ──
-
-    def fetch_ticker_sync(self, symbol: str) -> Ticker:
-        params = {"category": self._category, "symbol": symbol}
-        data = self._http.sync_get("/v5/market/tickers", params=params)
-        result = self._check(data)
-        return _parse_ticker(result["list"][0])
-
-    def fetch_candles_sync(self, symbol: str, timeframe: str = "1h", *, limit: int = 100) -> list[Candle]:
-        params = {
-            "category": self._category,
-            "symbol": symbol,
-            "interval": _TIMEFRAME_MAP.get(timeframe, timeframe),
-            "limit": limit,
-        }
-        data = self._http.sync_get("/v5/market/kline", params=params)
-        result = self._check(data)
-        return [_parse_candle(k) for k in result.get("list", [])]
-
-    def fetch_order_book_sync(self, symbol: str, *, limit: int = 20) -> OrderBook:
-        params = {"category": self._category, "symbol": symbol, "limit": limit}
-        data = self._http.sync_get("/v5/market/orderbook", params=params)
-        result = self._check(data)
-        return _parse_order_book(symbol, result)
-
-    def fetch_balance_sync(self) -> Balance:
-        query = "accountType=UNIFIED"
-        headers = self._auth_get_headers(query)
-        data = self._http.sync_get("/v5/account/wallet-balance", params={"accountType": "UNIFIED"}, headers=headers)
-        result = self._check(data)
-        return _parse_balance(result, data)
-
-    def create_order_sync(
-        self, symbol: str, side: str, order_type: str, amount: float, price: float | None = None
-    ) -> Order:
-        body: dict[str, Any] = {
-            "category": self._category,
-            "symbol": symbol,
-            "side": "Buy" if side.lower() == "buy" else "Sell",
-            "orderType": "Limit" if order_type.lower() == "limit" else "Market",
-            "qty": str(amount),
-        }
-        if price is not None:
-            body["price"] = str(price)
-            body["timeInForce"] = "GTC"
-        data = self._http.sync_post("/v5/order/create", data=body, headers=self._auth_post_headers(body))
-        result = self._check(data)
-        return Order(
-            id=result.get("orderId", ""),
-            symbol=symbol,
-            side=side.lower(),
-            type=order_type.lower(),
-            amount=amount,
-            price=price,
-            raw=data,
-        )
-
-    def cancel_order_sync(self, order_id: str, symbol: str) -> Order:
-        body = {"category": self._category, "symbol": symbol, "orderId": order_id}
-        data = self._http.sync_post("/v5/order/cancel", data=body, headers=self._auth_post_headers(body))
-        result = self._check(data)
-        return Order(id=result.get("orderId", order_id), symbol=symbol, side="", type="", amount=0, raw=data)
+    async def fetch_my_trades(
+        self, symbol: str | None = None, *, since: int | None = None, limit: int | None = None
+    ) -> list[MyTrade]:
+        raise NotSupportedError("bybit.fetch_my_trades is not implemented yet")
 
 
 # ── Parsers ──

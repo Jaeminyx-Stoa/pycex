@@ -6,14 +6,18 @@ from typing import Any
 
 from pycex.auth import binance_headers, binance_sign
 from pycex.base import BaseExchange
-from pycex.constants import BINANCE_BASE, BINANCE_BROKER_ID, BINANCE_TESTNET
+from pycex.constants import BINANCE_BASE, BINANCE_BROKER_ID, BINANCE_TESTNET, QUOTE_SUFFIXES
+from pycex.exceptions import NotSupportedError, SymbolNotFoundError
 from pycex.http import HTTPClient
 from pycex.models.balance import Balance, BalanceEntry
 from pycex.models.candle import Candle
+from pycex.models.market import Market
+from pycex.models.mytrade import MyTrade
 from pycex.models.order import Order
 from pycex.models.orderbook import OrderBook, OrderBookEntry
 from pycex.models.ticker import Ticker
 from pycex.models.trade import Trade
+from pycex.symbols import MarketType, parse_symbol
 
 _TIMEFRAME_MAP = {
     "1m": "1m",
@@ -34,16 +38,33 @@ class Binance(BaseExchange):
         api_key: str = "",
         secret: str = "",
         *,
-        testnet: bool = False,
+        sandbox: bool = False,
+        market_type: MarketType = "spot",
+        testnet: bool | None = None,
         timeout: float = 30.0,
     ) -> None:
         self._api_key = api_key
         self._secret = secret
-        base = BINANCE_TESTNET if testnet else BINANCE_BASE
+        self.market_type = market_type
+        self.sandbox = self._resolve_sandbox(sandbox, testnet, None)
+        self._markets: dict[str, Market] = {}
+        base = BINANCE_TESTNET if self.sandbox else BINANCE_BASE
         broker_headers: dict[str, str] = {}
         if BINANCE_BROKER_ID:
             broker_headers["X-MBX-BROKER-ID"] = BINANCE_BROKER_ID
         self._http = HTTPClient(base, timeout=timeout, rate=10.0, default_headers=broker_headers)
+
+    def to_native(self, symbol: str) -> str:
+        sym = parse_symbol(symbol)
+        return f"{sym.base}{sym.quote}"
+
+    def from_native(self, native: str) -> str:
+        if native in self._markets:
+            return self._markets[native].symbol
+        for quote in QUOTE_SUFFIXES:
+            if native.endswith(quote) and len(native) > len(quote):
+                return f"{native[: -len(quote)]}/{quote}"
+        raise SymbolNotFoundError(f"cannot resolve native symbol {native!r} for {self.name}")
 
     def _auth_headers(self) -> dict[str, str]:
         return binance_headers(self._api_key)
@@ -61,14 +82,27 @@ class Binance(BaseExchange):
         data = await self._http.get("/api/v3/depth", params={"symbol": symbol, "limit": limit})
         return _parse_order_book(symbol, data)
 
-    async def fetch_candles(self, symbol: str, timeframe: str = "1h", *, limit: int = 100) -> list[Candle]:
-        params = {"symbol": symbol, "interval": _TIMEFRAME_MAP.get(timeframe, timeframe), "limit": limit}
+    async def _fetch_candles_page(
+        self, native: str, timeframe: str, *, since: int | None, until: int | None, limit: int
+    ) -> list[Candle]:
+        params: dict[str, Any] = {
+            "symbol": native,
+            "interval": _TIMEFRAME_MAP.get(timeframe, timeframe),
+            "limit": limit,
+        }
+        if since is not None:
+            params["startTime"] = since
+        if until is not None:
+            params["endTime"] = until
         data = await self._http.get("/api/v3/klines", params=params)
         return [_parse_candle(k) for k in data]
 
     async def fetch_trades(self, symbol: str, *, limit: int = 100) -> list[Trade]:
         data = await self._http.get("/api/v3/trades", params={"symbol": symbol, "limit": limit})
         return [_parse_trade(symbol, t) for t in data]
+
+    async def fetch_markets(self) -> list[Market]:
+        raise NotSupportedError("binance.fetch_markets is not implemented yet")
 
     # ── Account ──
 
@@ -113,46 +147,10 @@ class Binance(BaseExchange):
         data = await self._http.get("/api/v3/openOrders", params=params, headers=self._auth_headers())
         return [_parse_order(o) for o in data]
 
-    # ── Sync ──
-
-    def fetch_ticker_sync(self, symbol: str) -> Ticker:
-        data = self._http.sync_get("/api/v3/ticker/24hr", params={"symbol": symbol})
-        return _parse_ticker(data)
-
-    def fetch_candles_sync(self, symbol: str, timeframe: str = "1h", *, limit: int = 100) -> list[Candle]:
-        params = {"symbol": symbol, "interval": _TIMEFRAME_MAP.get(timeframe, timeframe), "limit": limit}
-        data = self._http.sync_get("/api/v3/klines", params=params)
-        return [_parse_candle(k) for k in data]
-
-    def fetch_order_book_sync(self, symbol: str, *, limit: int = 20) -> OrderBook:
-        data = self._http.sync_get("/api/v3/depth", params={"symbol": symbol, "limit": limit})
-        return _parse_order_book(symbol, data)
-
-    def fetch_balance_sync(self) -> Balance:
-        params = self._signed_params()
-        data = self._http.sync_get("/api/v3/account", params=params, headers=self._auth_headers())
-        return _parse_balance(data)
-
-    def create_order_sync(
-        self, symbol: str, side: str, order_type: str, amount: float, price: float | None = None
-    ) -> Order:
-        params: dict[str, Any] = {
-            "symbol": symbol,
-            "side": side.upper(),
-            "type": order_type.upper(),
-            "quantity": str(amount),
-        }
-        if price is not None:
-            params["price"] = str(price)
-            params["timeInForce"] = "GTC"
-        params = self._signed_params(params)
-        data = self._http.sync_post("/api/v3/order", params=params, headers=self._auth_headers())
-        return _parse_order(data)
-
-    def cancel_order_sync(self, order_id: str, symbol: str) -> Order:
-        params = self._signed_params({"symbol": symbol, "orderId": order_id})
-        data = self._http.sync_delete("/api/v3/order", params=params, headers=self._auth_headers())
-        return _parse_order(data)
+    async def fetch_my_trades(
+        self, symbol: str | None = None, *, since: int | None = None, limit: int | None = None
+    ) -> list[MyTrade]:
+        raise NotSupportedError("binance.fetch_my_trades is not implemented yet")
 
 
 # ── Parsers ──
