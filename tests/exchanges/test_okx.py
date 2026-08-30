@@ -191,6 +191,19 @@ async def test_fetch_candles_page_linear_sorts_ascending(httpx_mock: HTTPXMock) 
     await ex.close()
 
 
+async def test_fetch_candles_page_daily_uses_utc_suffixed_bar(httpx_mock: HTTPXMock) -> None:
+    """🚨 Live-verified 2026-08-30 (Task 13): OKX's bare `bar=1D` aligns to Hong
+    Kong time (UTC+8), not UTC midnight — `bar=1Dutc` is required to match this
+    library's UTC-epoch-ms bar-open contract. Same trap applies to spot, so no
+    market_type branch here."""
+    httpx_mock.add_response(json=load_fixture("okx", "candles_swap_1d"))
+    ex = OKX(market_type="linear")
+    await ex._fetch_candles_page("BTC-USDT-SWAP", "1d", since=None, until=None, limit=100)
+    req = httpx_mock.get_request()
+    assert req.url.params["bar"] == "1Dutc"
+    await ex.close()
+
+
 async def test_candles_history_fallback_on_empty_regular_response(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(json={"code": "0", "msg": "", "data": []})
     httpx_mock.add_response(json=load_fixture("okx", "candles_swap_1d"))
