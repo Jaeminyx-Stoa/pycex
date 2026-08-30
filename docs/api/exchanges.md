@@ -61,6 +61,45 @@ with Binance(api_key="TESTNET_KEY", secret="TESTNET_SECRET", sandbox=True) as ex
         print(f"BTC balance: {btc.free}")
 ```
 
+### Binance USDT-M Perpetuals (`market_type="linear"`)
+
+`market_type="linear"` switches the base URL to `fapi.binance.com` (sandbox:
+`testnet.binancefuture.com`) and every endpoint to its `/fapi/v1`/`/fapi/v2`
+counterpart. Linear symbols use `BASE/QUOTE:QUOTE` notation, e.g. `BTC/USDT:USDT`.
+
+```python
+from pycex import Binance
+
+with Binance(api_key="KEY", secret="SECRET", market_type="linear") as ex:
+    markets = ex.fetch_markets_sync()  # populates the symbol cache used by from_native
+    funding = ex.fetch_funding_rate_sync("BTC/USDT:USDT")
+    print(f"funding rate: {funding.rate:.6f} (next {funding.next_funding_time})")
+
+    positions = ex.fetch_positions_sync()
+    for p in positions:
+        print(f"{p.symbol}: {p.side} {p.amount} @ {p.entry_price}, uPnL={p.unrealized_pnl}")
+
+    order = ex.create_order_sync("BTC/USDT:USDT", "buy", "market", 0.001)
+    trades = ex.fetch_my_trades_sync("BTC/USDT:USDT")
+```
+
+- `fetch_positions`/`fetch_funding_rate` raise `NotSupportedError` on a `"spot"`
+  instance (the shared `BaseExchange` default) — they only work with
+  `market_type="linear"`.
+- `fetch_my_trades` **requires** `symbol` on Binance (both spot and linear) and
+  raises `ValueError` if omitted — Binance's `myTrades`/`userTrades` endpoints
+  have no all-symbols mode.
+- `create_order` never sends `positionSide`, i.e. it assumes the futures
+  account is in **one-way mode** (Binance's default). A **hedge-mode** account
+  requires `positionSide=LONG`/`SHORT` on every order; without it Binance
+  rejects the order with `ExchangeError` code `-4061` ("Order's position side
+  does not match user's setting."), which this adapter surfaces unchanged —
+  switch the account back to one-way mode, or open a hedge-mode issue if you
+  need `positionSide` support added.
+- Linear account balance (`GET /fapi/v2/balance`) has no `locked` field; it is
+  derived as `balance - availableBalance` (funds tied up in position
+  margin/unrealized loss).
+
 ## Bybit
 
 Bybit uses the V5 API. Its native symbol format is the same as Binance

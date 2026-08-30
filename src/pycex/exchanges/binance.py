@@ -1,4 +1,19 @@
-"""Binance exchange adapter."""
+"""Binance exchange adapter — spot (``/api/v3``) and USDT-M linear perpetuals (``/fapi``).
+
+``market_type="linear"`` switches the base URL to ``fapi.binance.com`` (or its
+testnet) and every endpoint to its ``/fapi/v1``|``/fapi/v2`` counterpart via the
+``_PATHS`` table (see :meth:`Binance._p`), so no per-method ``if market_type``
+branching is needed. Confirmed against
+developers.binance.com/docs/derivatives/usds-margined-futures/{market-data,trade}/rest-api
+and developers.binance.com/docs/binance-spot-api-docs/rest-api/general-endpoints
+(2026-08-30).
+
+``create_order`` never sends ``positionSide`` — this assumes the linear account
+is in one-way mode (Binance's default). A hedge-mode account requires
+``positionSide=LONG``/``SHORT`` on every order; without it Binance rejects the
+order with ``ExchangeError`` code ``-4061`` ("Order's position side does not
+match user's setting."), which surfaces to the caller unchanged.
+"""
 
 from __future__ import annotations
 
@@ -6,18 +21,29 @@ from typing import Any
 
 from pycex.auth import binance_headers, binance_sign
 from pycex.base import BaseExchange
-from pycex.constants import BINANCE_BASE, BINANCE_BROKER_ID, BINANCE_TESTNET, QUOTE_SUFFIXES
-from pycex.exceptions import NotSupportedError, SymbolNotFoundError
+from pycex.constants import (
+    BINANCE_BASE,
+    BINANCE_BROKER_ID,
+    BINANCE_FAPI,
+    BINANCE_FAPI_TESTNET,
+    BINANCE_TESTNET,
+    QUOTE_SUFFIXES,
+)
+from pycex.exceptions import SymbolNotFoundError
 from pycex.http import HTTPClient
 from pycex.models.balance import Balance, BalanceEntry
 from pycex.models.candle import Candle
+from pycex.models.funding import FundingRate
 from pycex.models.market import Market
 from pycex.models.mytrade import MyTrade
 from pycex.models.order import Order
 from pycex.models.orderbook import OrderBook, OrderBookEntry
+from pycex.models.position import Position
 from pycex.models.ticker import Ticker
 from pycex.models.trade import Trade
 from pycex.symbols import MarketType, parse_symbol
+from pycex.symbols import linear as make_linear_symbol
+from pycex.symbols import spot as make_spot_symbol
 
 _TIMEFRAME_MAP = {
     "1m": "1m",
@@ -27,6 +53,35 @@ _TIMEFRAME_MAP = {
     "4h": "4h",
     "1d": "1d",
     "1w": "1w",
+}
+
+# Endpoint prefix per market_type, keyed by a logical name — kept as a table
+# rather than scattered `if self.market_type == "linear"` branches per method.
+_PATHS: dict[str, dict[str, str]] = {
+    "spot": {
+        "klines": "/api/v3/klines",
+        "ticker": "/api/v3/ticker/24hr",
+        "depth": "/api/v3/depth",
+        "trades": "/api/v3/trades",
+        "exchangeInfo": "/api/v3/exchangeInfo",
+        "order": "/api/v3/order",
+        "openOrders": "/api/v3/openOrders",
+        "userTrades": "/api/v3/myTrades",
+        "balance": "/api/v3/account",
+    },
+    "linear": {
+        "klines": "/fapi/v1/klines",
+        "ticker": "/fapi/v1/ticker/24hr",
+        "depth": "/fapi/v1/depth",
+        "trades": "/fapi/v1/trades",
+        "exchangeInfo": "/fapi/v1/exchangeInfo",
+        "order": "/fapi/v1/order",
+        "openOrders": "/fapi/v1/openOrders",
+        "userTrades": "/fapi/v1/userTrades",
+        "balance": "/fapi/v2/balance",
+        "positionRisk": "/fapi/v2/positionRisk",
+        "premiumIndex": "/fapi/v1/premiumIndex",
+    },
 }
 
 
@@ -48,11 +103,17 @@ class Binance(BaseExchange):
         self.market_type = market_type
         self.sandbox = self._resolve_sandbox(sandbox, testnet, None)
         self._markets: dict[str, Market] = {}
-        base = BINANCE_TESTNET if self.sandbox else BINANCE_BASE
+        if market_type == "linear":
+            base = BINANCE_FAPI_TESTNET if self.sandbox else BINANCE_FAPI
+        else:
+            base = BINANCE_TESTNET if self.sandbox else BINANCE_BASE
         broker_headers: dict[str, str] = {}
         if BINANCE_BROKER_ID:
             broker_headers["X-MBX-BROKER-ID"] = BINANCE_BROKER_ID
         self._http = HTTPClient(base, timeout=timeout, rate=10.0, default_headers=broker_headers)
+
+    def _p(self, name: str) -> str:
+        return _PATHS[self.market_type][name]
 
     def to_native(self, symbol: str) -> str:
         sym = parse_symbol(symbol)
@@ -63,7 +124,10 @@ class Binance(BaseExchange):
             return self._markets[native].symbol
         for quote in QUOTE_SUFFIXES:
             if native.endswith(quote) and len(native) > len(quote):
-                return f"{native[: -len(quote)]}/{quote}"
+                base = native[: -len(quote)]
+                if self.market_type == "linear":
+                    return make_linear_symbol(base, quote)
+                return make_spot_symbol(base, quote)
         raise SymbolNotFoundError(f"cannot resolve native symbol {native!r} for {self.name}")
 
     def _auth_headers(self) -> dict[str, str]:
@@ -76,12 +140,12 @@ class Binance(BaseExchange):
 
     async def fetch_ticker(self, symbol: str) -> Ticker:
         native = self.to_native(symbol)
-        data = await self._http.get("/api/v3/ticker/24hr", params={"symbol": native})
+        data = await self._http.get(self._p("ticker"), params={"symbol": native})
         return _parse_ticker(symbol, data)
 
     async def fetch_order_book(self, symbol: str, *, limit: int = 20) -> OrderBook:
         native = self.to_native(symbol)
-        data = await self._http.get("/api/v3/depth", params={"symbol": native, "limit": limit})
+        data = await self._http.get(self._p("depth"), params={"symbol": native, "limit": limit})
         return _parse_order_book(symbol, data)
 
     async def _fetch_candles_page(
@@ -96,23 +160,50 @@ class Binance(BaseExchange):
             params["startTime"] = since
         if until is not None:
             params["endTime"] = until
-        data = await self._http.get("/api/v3/klines", params=params)
+        data = await self._http.get(self._p("klines"), params=params)
         return [_parse_candle(k) for k in data]
 
     async def fetch_trades(self, symbol: str, *, limit: int = 100) -> list[Trade]:
         native = self.to_native(symbol)
-        data = await self._http.get("/api/v3/trades", params={"symbol": native, "limit": limit})
+        data = await self._http.get(self._p("trades"), params={"symbol": native, "limit": limit})
         return [_parse_trade(symbol, t) for t in data]
 
     async def fetch_markets(self) -> list[Market]:
-        raise NotSupportedError("binance.fetch_markets is not implemented yet")
+        data = await self._http.get(self._p("exchangeInfo"))
+        markets = [_parse_market(s, self.market_type) for s in data.get("symbols", [])]
+        self._markets = {m.native: m for m in markets}
+        return markets
 
     # ── Account ──
 
     async def fetch_balance(self) -> Balance:
         params = self._signed_params()
-        data = await self._http.get("/api/v3/account", params=params, headers=self._auth_headers())
+        data = await self._http.get(self._p("balance"), params=params, headers=self._auth_headers())
+        if self.market_type == "linear":
+            return _parse_balance_linear(data)
         return _parse_balance(data)
+
+    async def fetch_positions(self, symbols: list[str] | None = None) -> list[Position]:
+        if self.market_type != "linear":
+            return await super().fetch_positions(symbols)
+        params = self._signed_params()
+        data = await self._http.get(self._p("positionRisk"), params=params, headers=self._auth_headers())
+        positions = [
+            _parse_position(self.from_native(str(p.get("symbol", ""))), p)
+            for p in data
+            if float(p.get("positionAmt", 0) or 0) != 0
+        ]
+        if symbols is not None:
+            wanted = set(symbols)
+            positions = [p for p in positions if p.symbol in wanted]
+        return positions
+
+    async def fetch_funding_rate(self, symbol: str) -> FundingRate:
+        if self.market_type != "linear":
+            return await super().fetch_funding_rate(symbol)
+        native = self.to_native(symbol)
+        data = await self._http.get(self._p("premiumIndex"), params={"symbol": native})
+        return _parse_funding(symbol, data)
 
     # ── Trading ──
 
@@ -130,19 +221,19 @@ class Binance(BaseExchange):
             params["price"] = str(price)
             params["timeInForce"] = "GTC"
         params = self._signed_params(params)
-        data = await self._http.post("/api/v3/order", params=params, headers=self._auth_headers())
+        data = await self._http.post(self._p("order"), params=params, headers=self._auth_headers())
         return _parse_order(symbol, data)
 
     async def cancel_order(self, order_id: str, symbol: str) -> Order:
         native = self.to_native(symbol)
         params = self._signed_params({"symbol": native, "orderId": order_id})
-        data = await self._http.delete("/api/v3/order", params=params, headers=self._auth_headers())
+        data = await self._http.delete(self._p("order"), params=params, headers=self._auth_headers())
         return _parse_order(symbol, data)
 
     async def fetch_order(self, order_id: str, symbol: str) -> Order:
         native = self.to_native(symbol)
         params = self._signed_params({"symbol": native, "orderId": order_id})
-        data = await self._http.get("/api/v3/order", params=params, headers=self._auth_headers())
+        data = await self._http.get(self._p("order"), params=params, headers=self._auth_headers())
         return _parse_order(symbol, data)
 
     async def fetch_open_orders(self, symbol: str | None = None) -> list[Order]:
@@ -150,13 +241,23 @@ class Binance(BaseExchange):
         if symbol:
             p["symbol"] = self.to_native(symbol)
         params = self._signed_params(p)
-        data = await self._http.get("/api/v3/openOrders", params=params, headers=self._auth_headers())
+        data = await self._http.get(self._p("openOrders"), params=params, headers=self._auth_headers())
         return [_parse_order(self.from_native(o.get("symbol", "")), o) for o in data]
 
     async def fetch_my_trades(
         self, symbol: str | None = None, *, since: int | None = None, limit: int | None = None
     ) -> list[MyTrade]:
-        raise NotSupportedError("binance.fetch_my_trades is not implemented yet")
+        if symbol is None:
+            raise ValueError("binance requires symbol for my trades")
+        native = self.to_native(symbol)
+        p: dict[str, Any] = {"symbol": native}
+        if since is not None:
+            p["startTime"] = since
+        if limit is not None:
+            p["limit"] = limit
+        params = self._signed_params(p)
+        data = await self._http.get(self._p("userTrades"), params=params, headers=self._auth_headers())
+        return [_parse_my_trade(symbol, t) for t in data]
 
 
 # ── Parsers ──
@@ -165,14 +266,14 @@ class Binance(BaseExchange):
 def _parse_ticker(symbol: str, d: dict[str, Any]) -> Ticker:
     return Ticker(
         symbol=symbol,
-        last=float(d["lastPrice"]),
-        bid=float(d["bidPrice"]),
-        ask=float(d["askPrice"]),
-        high=float(d["highPrice"]),
-        low=float(d["lowPrice"]),
-        volume=float(d["volume"]),
-        quote_volume=float(d.get("quoteVolume", 0)),
-        timestamp=int(d.get("closeTime", 0)),
+        last=float(d.get("lastPrice", 0) or 0),
+        bid=float(d.get("bidPrice", 0) or 0),
+        ask=float(d.get("askPrice", 0) or 0),
+        high=float(d.get("highPrice", 0) or 0),
+        low=float(d.get("lowPrice", 0) or 0),
+        volume=float(d.get("volume", 0) or 0),
+        quote_volume=float(d.get("quoteVolume", 0) or 0),
+        timestamp=int(d.get("closeTime", 0) or 0),
         raw=d,
     )
 
@@ -208,6 +309,45 @@ def _parse_trade(symbol: str, t: dict[str, Any]) -> Trade:
     )
 
 
+def _parse_market(d: dict[str, Any], market_type: MarketType) -> Market:
+    """Parse one ``exchangeInfo`` symbol entry.
+
+    Ticks come from ``filters[]``: ``PRICE_FILTER.tickSize`` -> ``price_tick``,
+    ``LOT_SIZE.stepSize`` -> ``amount_step``, and minimum notional from
+    ``NOTIONAL.minNotional`` (spot) or ``MIN_NOTIONAL.notional`` (fapi) — the two
+    market types use different filter names for the same concept.
+    """
+    base = str(d.get("baseAsset", ""))
+    quote = str(d.get("quoteAsset", ""))
+    native = str(d.get("symbol", ""))
+    symbol = make_linear_symbol(base, quote) if market_type == "linear" else make_spot_symbol(base, quote)
+    price_tick: float | None = None
+    amount_step: float | None = None
+    min_notional: float | None = None
+    for f in d.get("filters", []):
+        ft = f.get("filterType")
+        if ft == "PRICE_FILTER" and f.get("tickSize") is not None:
+            price_tick = float(f["tickSize"])
+        elif ft == "LOT_SIZE" and f.get("stepSize") is not None:
+            amount_step = float(f["stepSize"])
+        elif ft == "NOTIONAL" and f.get("minNotional") is not None:
+            min_notional = float(f["minNotional"])
+        elif ft == "MIN_NOTIONAL" and f.get("notional") is not None:
+            min_notional = float(f["notional"])
+    return Market(
+        symbol=symbol,
+        native=native,
+        base=base,
+        quote=quote,
+        market_type=market_type,
+        price_tick=price_tick,
+        amount_step=amount_step,
+        min_notional=min_notional,
+        active=d.get("status") == "TRADING",
+        raw=d,
+    )
+
+
 def _parse_balance(d: dict[str, Any]) -> Balance:
     entries = []
     for b in d.get("balances", []):
@@ -216,6 +356,68 @@ def _parse_balance(d: dict[str, Any]) -> Balance:
         if free > 0 or locked > 0:
             entries.append(BalanceEntry(asset=b["asset"], free=free, locked=locked))
     return Balance(assets=entries, raw=d)
+
+
+def _parse_balance_linear(data: list[dict[str, Any]]) -> Balance:
+    """Parse ``GET /fapi/v2/balance`` — a bare list, unlike spot's ``{"balances": [...]}``.
+
+    ``locked`` has no direct field on this endpoint; it is derived as
+    ``balance - availableBalance`` (funds held as position margin/unrealized loss).
+    """
+    entries = []
+    for b in data:
+        total = float(b.get("balance", 0) or 0)
+        available = float(b.get("availableBalance", 0) or 0)
+        if total != 0 or available != 0:
+            entries.append(BalanceEntry(asset=str(b.get("asset", "")), free=available, locked=total - available))
+    return Balance(assets=entries, raw={"balances": data})
+
+
+def _parse_position(symbol: str, d: dict[str, Any]) -> Position:
+    amt = float(d.get("positionAmt", 0) or 0)
+    entry_price = d.get("entryPrice")
+    leverage = d.get("leverage")
+    liquidation_price = d.get("liquidationPrice")
+    return Position(
+        symbol=symbol,
+        side="long" if amt > 0 else "short",
+        amount=abs(amt),
+        entry_price=float(entry_price) if entry_price not in (None, "") else None,
+        unrealized_pnl=float(d.get("unRealizedProfit", 0) or 0),
+        leverage=float(leverage) if leverage not in (None, "") else None,
+        liquidation_price=float(liquidation_price) if liquidation_price not in (None, "") else None,
+        timestamp=int(d.get("updateTime", 0) or 0),
+        raw=d,
+    )
+
+
+def _parse_funding(symbol: str, d: dict[str, Any]) -> FundingRate:
+    return FundingRate(
+        symbol=symbol,
+        rate=float(d.get("lastFundingRate", 0) or 0),
+        interval_hours=8,
+        next_funding_time=int(d.get("nextFundingTime", 0) or 0),
+        timestamp=int(d.get("time", 0) or 0),
+        raw=d,
+    )
+
+
+def _parse_my_trade(symbol: str, t: dict[str, Any]) -> MyTrade:
+    # Spot `myTrades` has no `side` field, only `isBuyer` (bool); futures
+    # `userTrades` has an explicit `side` ("BUY"/"SELL") instead.
+    side = str(t["side"]).lower() if "side" in t else ("buy" if t.get("isBuyer") else "sell")
+    return MyTrade(
+        id=str(t.get("id", "")),
+        order_id=str(t.get("orderId", "")),
+        symbol=symbol,
+        side=side,
+        price=float(t.get("price", 0) or 0),
+        amount=float(t.get("qty", 0) or 0),
+        fee=float(t.get("commission", 0) or 0),
+        fee_asset=str(t.get("commissionAsset", "") or ""),
+        timestamp=int(t.get("time", 0) or 0),
+        raw=t,
+    )
 
 
 def _parse_order(symbol: str, d: dict[str, Any]) -> Order:
@@ -228,6 +430,6 @@ def _parse_order(symbol: str, d: dict[str, Any]) -> Order:
         price=float(d["price"]) if d.get("price") and float(d["price"]) > 0 else None,
         filled=float(d.get("executedQty", 0)),
         status=d.get("status", ""),
-        timestamp=int(d.get("transactTime", 0) or d.get("time", 0)),
+        timestamp=int(d.get("transactTime", 0) or d.get("time", 0) or d.get("updateTime", 0)),
         raw=d,
     )

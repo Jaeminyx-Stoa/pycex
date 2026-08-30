@@ -5,6 +5,8 @@ from __future__ import annotations
 # ── Binance ──
 BINANCE_BASE = "https://api.binance.com"
 BINANCE_TESTNET = "https://testnet.binance.vision"
+BINANCE_FAPI = "https://fapi.binance.com"  # USDT-M perpetual futures (market_type="linear")
+BINANCE_FAPI_TESTNET = "https://testnet.binancefuture.com"
 
 # ── Bybit ──
 BYBIT_BASE = "https://api.bybit.com"
@@ -46,7 +48,7 @@ BITGET_BROKER_ID = ""  # X-CHANNEL-API-CODE for API broker rebate
 # Quote-asset suffixes tried (longest-match-first is not required here since
 # each candidate is checked in this fixed priority order) when an adapter has
 # no markets cache yet to resolve a native symbol back to canonical notation.
-QUOTE_SUFFIXES: tuple[str, ...] = ("USDT", "USDC", "BTC", "ETH", "BNB", "FDUSD", "KRW")
+QUOTE_SUFFIXES: tuple[str, ...] = ("USDT", "USDC", "BTC", "ETH", "BNB", "FDUSD", "TRY", "EUR", "KRW")
 
 # ── Timeframes ──
 TIMEFRAME_1m = "1m"
