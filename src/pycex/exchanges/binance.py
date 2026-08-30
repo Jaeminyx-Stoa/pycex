@@ -35,6 +35,17 @@ Doc verification (2026-08-30) — not a blanket "confirmed", itemized:
   session — treat it as unverified-by-fetch if it ever needs to be relied on
   precisely (e.g. matching on the numeric code programmatically).
 
+Error mapping (2026-08-30, live-fetched and confirmed against
+developers.binance.com/docs/binance-spot-api-docs/errors): ``-2010``
+("Account has insufficient balance for requested action.") -> insufficient
+balance; ``-2014``/``-2015`` (bad API-key format / invalid key-IP-permissions)
+-> authentication; ``-2013`` ("Order does not exist.") -> order not found;
+``-1003`` (too many requests / weight-limit / IP ban) -> rate limit. Wired via
+``_error_mapper`` into ``HTTPClient`` the same way as OKX/Bitget/Bybit, so a
+previously-unmapped Binance HTTP>=400 body (``{"code": ..., "msg": ...}``) now
+raises the matching typed exception instead of the generic ``ExchangeError``
+fallback.
+
 ``create_order`` never sends ``positionSide`` — this assumes the linear account
 is in one-way mode (Binance's default). A hedge-mode account requires
 ``positionSide=LONG``/``SHORT`` on every order; without it Binance rejects the
@@ -56,7 +67,15 @@ from pycex.constants import (
     BINANCE_TESTNET,
     QUOTE_SUFFIXES,
 )
-from pycex.exceptions import SymbolNotFoundError
+from pycex.exceptions import (
+    AuthenticationError,
+    ExchangeError,
+    InsufficientBalanceError,
+    OrderNotFoundError,
+    PyCexError,
+    RateLimitError,
+    SymbolNotFoundError,
+)
 from pycex.http import HTTPClient
 from pycex.models.balance import Balance, BalanceEntry
 from pycex.models.candle import Candle
@@ -137,7 +156,9 @@ class Binance(BaseExchange):
         broker_headers: dict[str, str] = {}
         if BINANCE_BROKER_ID:
             broker_headers["X-MBX-BROKER-ID"] = BINANCE_BROKER_ID
-        self._http = HTTPClient(base, timeout=timeout, rate=10.0, default_headers=broker_headers)
+        self._http = HTTPClient(
+            base, timeout=timeout, rate=10.0, default_headers=broker_headers, error_mapper=_error_mapper
+        )
 
     def _p(self, name: str) -> str:
         return _PATHS[self.market_type][name]
@@ -467,3 +488,41 @@ def _parse_order(symbol: str, d: dict[str, Any]) -> Order:
         timestamp=int(d.get("transactTime", 0) or d.get("time", 0) or d.get("updateTime", 0)),
         raw=d,
     )
+
+
+# ── Errors ──
+
+# Confirmed via developers.binance.com/docs/binance-spot-api-docs/errors (see module docstring).
+_INSUFFICIENT_BALANCE_CODES = frozenset({"-2010"})
+_AUTH_CODES = frozenset({"-2014", "-2015"})
+_ORDER_NOT_FOUND_CODES = frozenset({"-2013"})
+_RATE_LIMIT_CODES = frozenset({"-1003"})
+
+
+def _map_error(code: str, msg: str) -> PyCexError:
+    if code in _INSUFFICIENT_BALANCE_CODES:
+        return InsufficientBalanceError(msg, code=code, exchange="binance")
+    if code in _AUTH_CODES:
+        return AuthenticationError(msg)
+    if code in _ORDER_NOT_FOUND_CODES:
+        return OrderNotFoundError(msg, code=code, exchange="binance")
+    if code in _RATE_LIMIT_CODES:
+        return RateLimitError(msg, code=code, exchange="binance")
+    return ExchangeError(msg, code=code, exchange="binance")
+
+
+def _error_mapper(status: int, data: dict[str, Any]) -> PyCexError | None:
+    """Binance's wire ``code`` is a JSON number (e.g. ``-2011``), not a string
+    like OKX/Bitget/Bybit's. ``_map_error`` still takes ``str`` for a uniform
+    cross-adapter interface (see ``tests/test_exceptions.py``), but the raw
+    numeric code is restored onto the resulting exception's ``.code`` so
+    callers who compare it against the documented integer codes still see the
+    type they expect (an unmapped code -> the generic ``ExchangeError``
+    fallback branch, still carrying the original int)."""
+    code = data.get("code")
+    if code is None:
+        return None
+    err = _map_error(str(code), str(data.get("msg", "Unknown error")))
+    if isinstance(err, ExchangeError):
+        err.code = code
+    return err

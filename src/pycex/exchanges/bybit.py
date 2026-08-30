@@ -1,4 +1,40 @@
-"""Bybit V5 exchange adapter."""
+"""Bybit V5 exchange adapter — spot (``category=spot``) and USDT-margined
+linear perpetual futures (``category=linear``, ``market_type="linear"``).
+
+Both market types share the same host/version prefix (``/v5``) and native
+symbol shape (``BTCUSDT`` for both spot and linear — Bybit does not append a
+contract-type suffix like OKX's ``-SWAP`` or a distinct product family like
+Bitget's sandbox ``S``-prefix), so ``from_native`` cannot tell spot and
+linear apart from the wire string alone and instead branches on
+``self.market_type`` (see that method's docstring).
+
+Doc verification (2026-08-30), via ``WebFetch`` against the live docs:
+- ``guide`` (auth): sign string = ``timestamp + api_key + recv_window +
+  payload``, where payload is the **query string** for GET and the **raw
+  JSON body string** for POST — confirmed verbatim. This is why
+  ``create_order``/``cancel_order`` must sign and send the *exact same*
+  string (see the ``post_raw`` fix below, mirroring OKX/Bitget): signing
+  ``json.dumps(body)`` and then sending via ``HTTPClient.post(data=body)``
+  re-serializes the dict with httpx's own (possibly different) JSON
+  encoding, breaking the signature the moment separators/key order differ.
+- ``market/instrument`` (``GET /v5/market/instruments-info``): confirmed
+  field names ``symbol``, ``baseCoin``, ``quoteCoin``, ``status`` (value
+  ``"Trading"`` for active) at the top level, and ``priceFilter.tickSize``,
+  ``lotSizeFilter.qtyStep``, ``lotSizeFilter.minOrderAmt`` (spot-only,
+  minimum order *value*, not quantity) nested one level down.
+- ``order/execution`` (``GET /v5/execution/list``): confirmed field names
+  ``execId``, ``orderId``, ``symbol``, ``side``, ``execPrice``, ``execQty``,
+  ``execFee``, ``feeCurrency``, ``execTime`` (ms) — all listed as always
+  present for a fill row.
+- ``error`` (retCode table): confirmed ``110007``/``110004``/``110012``
+  (insufficient balance), ``10003``/``10004`` (invalid key / bad signature),
+  ``110001``/``170213`` (order does not exist, UTA vs. spot-trade variants),
+  ``10006`` (rate limit) — used below in ``_map_error``.
+
+``fetch_positions``/``fetch_funding_rate`` are intentionally left at the
+``BaseExchange`` default (``NotSupportedError``) — out of phase-1 scope for
+this adapter, matching the brief.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +44,15 @@ from typing import Any
 from pycex.auth import bybit_headers
 from pycex.base import BaseExchange
 from pycex.constants import BYBIT_BASE, BYBIT_REFERRAL_CODE, BYBIT_TESTNET, QUOTE_SUFFIXES
-from pycex.exceptions import ExchangeError, NotSupportedError, SymbolNotFoundError
+from pycex.exceptions import (
+    AuthenticationError,
+    ExchangeError,
+    InsufficientBalanceError,
+    OrderNotFoundError,
+    PyCexError,
+    RateLimitError,
+    SymbolNotFoundError,
+)
 from pycex.http import HTTPClient
 from pycex.models.balance import Balance, BalanceEntry
 from pycex.models.candle import Candle
@@ -19,6 +63,8 @@ from pycex.models.orderbook import OrderBook, OrderBookEntry
 from pycex.models.ticker import Ticker
 from pycex.models.trade import Trade
 from pycex.symbols import MarketType, parse_symbol
+from pycex.symbols import linear as make_linear_symbol
+from pycex.symbols import spot as make_spot_symbol
 
 _TIMEFRAME_MAP = {
     "1m": "1",
@@ -29,8 +75,6 @@ _TIMEFRAME_MAP = {
     "1d": "D",
     "1w": "W",
 }
-
-_CATEGORY = "spot"
 
 
 class Bybit(BaseExchange):
@@ -57,32 +101,51 @@ class Bybit(BaseExchange):
         broker_headers: dict[str, str] = {}
         if BYBIT_REFERRAL_CODE:
             broker_headers["Referer"] = BYBIT_REFERRAL_CODE
-        self._http = HTTPClient(base, timeout=timeout, rate=10.0, default_headers=broker_headers)
+        self._http = HTTPClient(
+            base, timeout=timeout, rate=10.0, default_headers=broker_headers, error_mapper=_error_mapper
+        )
 
     def to_native(self, symbol: str) -> str:
         sym = parse_symbol(symbol)
+        if sym.settle is not None and sym.settle != sym.quote:
+            raise SymbolNotFoundError(
+                f"bybit: inverse/cross-settle perpetuals are out of scope (USDT-settled only): {symbol!r}"
+            )
         return f"{sym.base}{sym.quote}"
 
     def from_native(self, native: str) -> str:
+        """Bybit's native symbol (``BTCUSDT``) is identical for spot and
+        linear — there is no wire-format cue (unlike OKX's ``-SWAP`` suffix)
+        to tell them apart, so this branches on ``self.market_type`` instead:
+        a linear-configured adapter always resolves to ``BASE/QUOTE:QUOTE``,
+        a spot-configured one always to ``BASE/QUOTE`` (never emits a settle
+        suffix)."""
         if native in self._markets:
             return self._markets[native].symbol
         for quote in QUOTE_SUFFIXES:
             if native.endswith(quote) and len(native) > len(quote):
-                return f"{native[: -len(quote)]}/{quote}"
+                base = native[: -len(quote)]
+                if self.market_type == "linear":
+                    return make_linear_symbol(base, quote, quote)
+                return make_spot_symbol(base, quote)
         raise SymbolNotFoundError(f"cannot resolve native symbol {native!r} for {self.name}")
 
     def _check(self, data: dict[str, Any]) -> dict[str, Any]:
-        if data.get("retCode", 0) != 0:
-            raise ExchangeError(data.get("retMsg", "Unknown error"), code=data.get("retCode"), exchange="bybit")
+        ret_code = data.get("retCode", 0)
+        if ret_code != 0:
+            raise _map_error(str(ret_code), str(data.get("retMsg", "Unknown error")))
         result: dict[str, Any] = data.get("result", data)
         return result
 
     def _auth_get_headers(self, query: str) -> dict[str, str]:
         return bybit_headers(self._api_key, self._secret, query)
 
-    def _auth_post_headers(self, body: dict[str, Any]) -> dict[str, str]:
-        payload = json.dumps(body)
-        headers = bybit_headers(self._api_key, self._secret, payload)
+    def _auth_post_headers(self, body_str: str) -> dict[str, str]:
+        """Sign the exact JSON body string that will go on the wire. Callers
+        must pass this same ``body_str`` to ``HTTPClient.post_raw`` — never
+        re-serialize the dict via ``post(data=...)``, which would re-encode
+        it with httpx's own JSON separators and break the signature."""
+        headers = bybit_headers(self._api_key, self._secret, body_str)
         headers["Content-Type"] = "application/json"
         return headers
 
@@ -127,7 +190,12 @@ class Bybit(BaseExchange):
         return [_parse_trade(symbol, t) for t in result.get("list", [])]
 
     async def fetch_markets(self) -> list[Market]:
-        raise NotSupportedError("bybit.fetch_markets is not implemented yet")
+        params = {"category": self._category}
+        data = await self._http.get("/v5/market/instruments-info", params=params)
+        result = self._check(data)
+        markets = [_parse_market(d, self.market_type) for d in result.get("list", [])]
+        self._markets = {m.native: m for m in markets}
+        return markets
 
     # ── Account ──
 
@@ -154,7 +222,8 @@ class Bybit(BaseExchange):
         if price is not None:
             body["price"] = str(price)
             body["timeInForce"] = "GTC"
-        data = await self._http.post("/v5/order/create", data=body, headers=self._auth_post_headers(body))
+        body_str = json.dumps(body)
+        data = await self._http.post_raw("/v5/order/create", body=body_str, headers=self._auth_post_headers(body_str))
         result = self._check(data)
         return Order(
             id=result.get("orderId", ""),
@@ -169,7 +238,8 @@ class Bybit(BaseExchange):
     async def cancel_order(self, order_id: str, symbol: str) -> Order:
         native = self.to_native(symbol)
         body = {"category": self._category, "symbol": native, "orderId": order_id}
-        data = await self._http.post("/v5/order/cancel", data=body, headers=self._auth_post_headers(body))
+        body_str = json.dumps(body)
+        data = await self._http.post_raw("/v5/order/cancel", body=body_str, headers=self._auth_post_headers(body_str))
         result = self._check(data)
         return Order(id=result.get("orderId", order_id), symbol=symbol, side="", type="", amount=0, raw=data)
 
@@ -195,7 +265,21 @@ class Bybit(BaseExchange):
     async def fetch_my_trades(
         self, symbol: str | None = None, *, since: int | None = None, limit: int | None = None
     ) -> list[MyTrade]:
-        raise NotSupportedError("bybit.fetch_my_trades is not implemented yet")
+        params: dict[str, Any] = {"category": self._category}
+        if symbol is not None:
+            params["symbol"] = self.to_native(symbol)
+        if limit is not None:
+            params["limit"] = limit
+        query = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+        data = await self._http.get("/v5/execution/list", params=params, headers=self._auth_get_headers(query))
+        result = self._check(data)
+        trades = [
+            _parse_my_trade(symbol if symbol is not None else self.from_native(str(t.get("symbol", ""))), t)
+            for t in result.get("list", [])
+        ]
+        if since is not None:
+            trades = [t for t in trades if t.timestamp >= since]
+        return trades
 
 
 # ── Parsers ──
@@ -247,6 +331,34 @@ def _parse_trade(symbol: str, t: dict[str, Any]) -> Trade:
     )
 
 
+def _parse_market(d: dict[str, Any], market_type: MarketType) -> Market:
+    """Parse one ``GET /v5/market/instruments-info`` row (see module
+    docstring for field-name confirmation). ``minOrderAmt`` (a notional
+    floor, spot-only) maps to ``min_notional``; there is no linear
+    equivalent in this response, so it is ``None`` for linear rows."""
+    native = str(d.get("symbol", ""))
+    base = str(d.get("baseCoin", ""))
+    quote = str(d.get("quoteCoin", ""))
+    symbol = make_linear_symbol(base, quote, quote) if market_type == "linear" else make_spot_symbol(base, quote)
+    price_filter = d.get("priceFilter") or {}
+    lot_filter = d.get("lotSizeFilter") or {}
+    tick = price_filter.get("tickSize")
+    step = lot_filter.get("qtyStep")
+    min_notional_raw = lot_filter.get("minOrderAmt")
+    return Market(
+        symbol=symbol,
+        native=native,
+        base=base,
+        quote=quote,
+        market_type=market_type,
+        price_tick=float(tick) if tick not in (None, "") else None,
+        amount_step=float(step) if step not in (None, "") else None,
+        min_notional=float(min_notional_raw) if min_notional_raw not in (None, "") else None,
+        active=d.get("status") == "Trading",
+        raw=d,
+    )
+
+
 def _parse_balance(result: dict[str, Any], raw: dict[str, Any]) -> Balance:
     entries = []
     for account in result.get("list", []):
@@ -271,3 +383,46 @@ def _parse_order(symbol: str, d: dict[str, Any]) -> Order:
         timestamp=int(d.get("createdTime", 0)),
         raw=d,
     )
+
+
+def _parse_my_trade(symbol: str, t: dict[str, Any]) -> MyTrade:
+    return MyTrade(
+        id=str(t.get("execId", "")),
+        order_id=str(t.get("orderId", "")),
+        symbol=symbol,
+        side=str(t.get("side", "")).lower(),
+        price=float(t.get("execPrice", 0) or 0),
+        amount=float(t.get("execQty", 0) or 0),
+        fee=float(t.get("execFee", 0) or 0),
+        fee_asset=str(t.get("feeCurrency", "") or ""),
+        timestamp=int(t.get("execTime", 0) or 0),
+        raw=t,
+    )
+
+
+# ── Errors ──
+
+# Confirmed via https://bybit-exchange.github.io/docs/v5/error (see module docstring).
+_INSUFFICIENT_BALANCE_CODES = frozenset({"110007", "110004", "110012"})
+_AUTH_CODES = frozenset({"10003", "10004"})
+_ORDER_NOT_FOUND_CODES = frozenset({"110001", "170213"})
+_RATE_LIMIT_CODES = frozenset({"10006"})
+
+
+def _map_error(code: str, msg: str) -> PyCexError:
+    if code in _INSUFFICIENT_BALANCE_CODES:
+        return InsufficientBalanceError(msg, code=code, exchange="bybit")
+    if code in _AUTH_CODES:
+        return AuthenticationError(msg)
+    if code in _ORDER_NOT_FOUND_CODES:
+        return OrderNotFoundError(msg, code=code, exchange="bybit")
+    if code in _RATE_LIMIT_CODES:
+        return RateLimitError(msg, code=code, exchange="bybit")
+    return ExchangeError(msg, code=code, exchange="bybit")
+
+
+def _error_mapper(status: int, data: dict[str, Any]) -> PyCexError | None:
+    code = data.get("retCode")
+    if code is None or str(code) == "0":
+        return None
+    return _map_error(str(code), str(data.get("retMsg", "Unknown error")))
