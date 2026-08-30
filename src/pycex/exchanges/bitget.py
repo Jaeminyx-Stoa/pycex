@@ -371,10 +371,9 @@ class Bitget(BaseExchange):
     # ── Account ──
 
     async def fetch_balance(self) -> Balance:
-        path = self._p("balance")
         params = self._mix_params() if self.market_type == "linear" else None
-        full_path = self._path(path, params)
-        data = await self._http.get(path, params=params, headers=self._signed_get(full_path))
+        path = self._path(self._p("balance"), params)
+        data = await self._http.get(path, headers=self._signed_get(path))
         result = self._check(data)
         if self.market_type == "linear":
             return _parse_balance_linear(result, data)
@@ -383,10 +382,9 @@ class Bitget(BaseExchange):
     async def fetch_positions(self, symbols: list[str] | None = None) -> list[Position]:
         if self.market_type != "linear":
             return await super().fetch_positions(symbols)
-        path = self._p("positions")
         params = self._mix_params({"marginCoin": "USDT"})
-        full_path = self._path(path, params)
-        data = await self._http.get(path, params=params, headers=self._signed_get(full_path))
+        path = self._path(self._p("positions"), params)
+        data = await self._http.get(path, headers=self._signed_get(path))
         result = self._check(data)
         positions = [
             _parse_position(self.from_native(str(p.get("symbol", ""))), p)
@@ -729,9 +727,15 @@ def _parse_order(symbol: str, d: dict[str, Any]) -> Order:
 
 
 def _parse_order_mix(symbol: str, d: dict[str, Any]) -> Order:
-    """mix order detail/pending rows use ``state`` for status (spot uses
-    ``status``) — confirmed via ccxt's fetchOrder/fetchOpenOrders comments."""
+    """mix order rows are inconsistent about the status field name across
+    endpoints: ``/mix/order/detail`` uses ``state``, but
+    ``/mix/order/orders-pending`` (``entrustedList``) uses ``status`` instead
+    (ccxt handles this the same way — ``safeStringN(order, ['status',
+    'state'])``). Read ``status`` first, fall back to ``state``."""
     price = float(d.get("price", 0) or 0)
+    status = d.get("status")
+    if status is None:
+        status = d.get("state", "")
     return Order(
         id=str(d.get("orderId", "")),
         symbol=symbol,
@@ -740,7 +744,7 @@ def _parse_order_mix(symbol: str, d: dict[str, Any]) -> Order:
         amount=float(d.get("size", 0) or 0),
         price=price if price > 0 else None,
         filled=float(d.get("baseVolume", 0) or 0),
-        status=d.get("state", ""),
+        status=status,
         timestamp=int(d.get("cTime", 0) or 0),
         raw=d,
     )

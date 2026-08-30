@@ -45,6 +45,7 @@ from pycex.exchanges.bitget import (
     _parse_funding,
     _parse_market,
     _parse_my_trade_mix,
+    _parse_order_mix,
     _parse_position,
 )
 from tests.conftest import load_fixture
@@ -377,6 +378,118 @@ async def test_fetch_balance_linear_signed(httpx_mock: HTTPXMock) -> None:
     entry = balance.get("USDT")
     assert entry is not None
     assert entry.free == 12.5
+    await ex.close()
+
+
+# ── orders (mix): status/state field fallback, signed GET requests ──
+
+
+def test_parse_order_mix_reads_status_field_from_orders_pending() -> None:
+    """/mix/order/orders-pending (entrustedList) rows use `status`, not `state`."""
+    o = _parse_order_mix(
+        "BTC/USDT:USDT",
+        {
+            "symbol": "BTCUSDT",
+            "orderId": "1111488897767604224",
+            "size": "0.002",
+            "price": "25000",
+            "baseVolume": "0",
+            "side": "buy",
+            "orderType": "limit",
+            "status": "live",
+            "cTime": "1700725524378",
+        },
+    )
+    assert o.status == "live"
+
+
+def test_parse_order_mix_falls_back_to_state_field_from_order_detail() -> None:
+    """/mix/order/detail rows use `state`, not `status`."""
+    o = _parse_order_mix(
+        "BTC/USDT:USDT",
+        {
+            "symbol": "BTCUSDT",
+            "orderId": "1111465253393825792",
+            "size": "0.001",
+            "price": "27000",
+            "baseVolume": "0",
+            "side": "buy",
+            "orderType": "limit",
+            "state": "live",
+            "cTime": "1700719887120",
+        },
+    )
+    assert o.status == "live"
+
+
+async def test_fetch_open_orders_linear_reads_status_from_entrustedlist(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        json={
+            "code": "00000",
+            "msg": "success",
+            "requestTime": 1700725609065,
+            "data": {
+                "entrustedList": [
+                    {
+                        "symbol": "BTCUSDT",
+                        "orderId": "1111488897767604224",
+                        "size": "0.002",
+                        "price": "25000",
+                        "baseVolume": "0",
+                        "side": "buy",
+                        "orderType": "limit",
+                        "status": "live",
+                        "cTime": "1700725524378",
+                    }
+                ],
+                "endId": "1111488897767604224",
+            },
+        }
+    )
+    ex = Bitget(api_key="k", secret=SECRET, passphrase="p", market_type="linear")
+    orders = await ex.fetch_open_orders("BTC/USDT:USDT")
+    req = httpx_mock.get_request()
+    assert req.url.path == "/api/v2/mix/order/orders-pending"
+    assert req.url.params["productType"] == "USDT-FUTURES"
+    assert req.url.params["symbol"] == "BTCUSDT"
+    _assert_valid_signature(req)
+    assert req.headers["ACCESS-KEY"] == "k"
+    assert len(orders) == 1
+    assert orders[0].symbol == "BTC/USDT:USDT"
+    assert orders[0].status == "live"
+    await ex.close()
+
+
+async def test_fetch_order_linear_reads_state_from_order_detail(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        json={
+            "code": "00000",
+            "msg": "success",
+            "requestTime": 1700719918781,
+            "data": {
+                "symbol": "BTCUSDT",
+                "size": "0.001",
+                "orderId": "1111465253393825792",
+                "price": "27000",
+                "baseVolume": "0",
+                "side": "buy",
+                "orderType": "limit",
+                "state": "live",
+                "cTime": "1700719887120",
+            },
+        }
+    )
+    ex = Bitget(api_key="k", secret=SECRET, passphrase="p", market_type="linear")
+    order = await ex.fetch_order("1111465253393825792", "BTC/USDT:USDT")
+    req = httpx_mock.get_request()
+    assert req.url.path == "/api/v2/mix/order/detail"
+    assert req.url.params["productType"] == "USDT-FUTURES"
+    assert req.url.params["symbol"] == "BTCUSDT"
+    assert req.url.params["orderId"] == "1111465253393825792"
+    _assert_valid_signature(req)
+    assert req.headers["ACCESS-KEY"] == "k"
+    assert order.symbol == "BTC/USDT:USDT"
+    assert order.status == "live"
     await ex.close()
 
 
