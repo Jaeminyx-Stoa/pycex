@@ -7,6 +7,7 @@ import logging
 import time
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 
@@ -102,6 +103,26 @@ class HTTPClient:
         await self._limiter.acquire()
         try:
             resp = await self._client.delete(path, params=params, headers=headers)
+            return self._handle_response(resp)
+        except httpx.HTTPError as e:
+            raise NetworkError(str(e)) from e
+
+    async def post_form(
+        self, path: str, *, data: dict[str, Any] | None = None, headers: dict[str, str] | None = None
+    ) -> Any:
+        """POST an ``application/x-www-form-urlencoded`` body (async only — no sync twin).
+
+        Encodes ``data`` with :func:`urllib.parse.urlencode` ourselves (rather than
+        handing the dict to httpx's own ``data=`` form encoding) so that callers who
+        need to sign the exact bytes being sent — e.g. Korbit, whose signature covers
+        the literal encoded body — get a byte-for-byte match between what they signed
+        and what goes over the wire.
+        """
+        await self._limiter.acquire()
+        body = urlencode(data or {}, doseq=True)
+        merged_headers = {"Content-Type": "application/x-www-form-urlencoded", **(headers or {})}
+        try:
+            resp = await self._client.post(path, content=body, headers=merged_headers)
             return self._handle_response(resp)
         except httpx.HTTPError as e:
             raise NetworkError(str(e)) from e

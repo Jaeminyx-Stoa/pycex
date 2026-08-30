@@ -320,6 +320,90 @@ Bithumb(
   different from Upbit, which resets at 00:00 UTC, despite both exchanges
   returning the same `candle_date_time_utc` field shape.
 
+## Korbit
+
+Korbit is a Korean-won (KRW) spot exchange (v2 REST) — no sandbox/demo
+environment and spot only. Unlike Upbit/Bithumb (JWT-in-header), Korbit signs
+with a single header (`X-KAPI-KEY`) plus two ordinary request *parameters*
+that ride alongside every private call: `timestamp` (Unix ms) and `signature`
+(HMAC-SHA256 hex over the exact encoded query string — GET/DELETE — or
+`application/x-www-form-urlencoded` body — POST — that is actually sent,
+`signature` itself excluded). Every response, public or private, is wrapped
+`{"success": true/false, "data": ...}`.
+
+🚨 **문서 확인일 2026-08-30, 서명 = HMAC-SHA256(secret, 전송될 쿼리스트링 또는 폼바디 문자열(signature 제외))**,
+헤더는 `X-KAPI-KEY` 하나뿐이고 `timestamp`/`signature`는 헤더가 아니라 파라미터로 전송됨
+(GET/DELETE=쿼리, POST=`application/x-www-form-urlencoded` 바디) —
+`docs.korbit.co.kr/llms/en/rest_api.md` · `rest_api/trading.md` · `rest_api/quotation.md` 직접 열람으로 확인.
+
+```python
+from pycex import Korbit
+
+# Public data (no auth)
+with Korbit() as ex:
+    ticker = ex.fetch_ticker_sync("BTC/KRW")
+    candles = ex.fetch_candles_sync("BTC/KRW", "1d", limit=3)
+    print(f"BTC: ₩{ticker.last:,.0f}")
+
+# With authentication
+with Korbit(api_key="KEY", secret="SECRET") as ex:
+    balance = ex.fetch_balance_sync()
+    order = ex.create_order_sync("BTC/KRW", "buy", "limit", 0.001, 100_000_000.0)
+    canceled = ex.cancel_order_sync(order.id, "BTC/KRW")
+```
+
+### Korbit Constructor
+
+```python
+Korbit(
+    api_key: str = "",
+    secret: str = "",
+    *,
+    sandbox: bool = False,      # always False — raises NotSupportedError if True
+    market_type: MarketType = "spot",  # must be "spot" — raises NotSupportedError otherwise
+    timeout: float = 30.0,
+)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `api_key` | `str` | `""` | Korbit API key (sent as `X-KAPI-KEY` header) |
+| `secret` | `str` | `""` | Korbit API secret (HMAC-SHA256 signing key) |
+| `sandbox` | `bool` | `False` | Not supported — Korbit has no demo environment |
+| `market_type` | `"spot" \| "linear"` | `"spot"` | Only `"spot"` is supported |
+| `timeout` | `float` | `30.0` | HTTP request timeout in seconds |
+
+### Korbit Notes
+
+- **Auth is param-based, not header-based**: only `X-KAPI-KEY` is a header;
+  `timestamp` and `signature` are request parameters, computed by
+  `pycex.auth.korbit_sign` over the *exact* string that will be sent
+  (`HTTPClient.post_form` was added specifically so the signed bytes and the
+  wire bytes are guaranteed identical — see its docstring).
+- **Symbols**: `btc_krw` (lowercase, underscore) — different from
+  Upbit/Bithumb's `KRW-BTC`.
+- **Candle `interval`**: `1,5,15,60,240,1D` (minutes for the numeric values;
+  `4h` → `240`, not `4h`). Confirmed against the live docs — the sidebar
+  shorthand (`1m/5m/.../4h/1D`) the initial spec-sheet research flagged as
+  unverified does **not** match the actual parameter values.
+- 🚨 **`fetch_markets` active flag deviates from the original brief**: the real
+  `GET /v2/currencyPairs` `status` field is `"launched"` / `"stopped"`, not
+  `"active"` / `"inactive"` — confirmed against both the Task-0 fixture and a
+  live docs fetch. `Market.active` is `True` iff `status == "launched"`.
+- **Order amount parameter**: limit orders and market sells send `qty`
+  (base-asset quantity); market buys send `amt` (quote-currency total to
+  spend) — same buy/sell asymmetry as Upbit/Bithumb, different parameter names.
+- **`fetch_open_orders`/`fetch_my_trades` require a symbol**: Korbit's API has
+  no all-symbols listing for these (unlike Upbit/Bithumb); passing `symbol=None`
+  raises `NotSupportedError`.
+- **`cancel_order` returns unguessed side/type**: `DELETE /v2/orders` responds
+  `{"success": true}` only, so the returned `Order`'s `side`/`type` stay `""`
+  rather than being fabricated — see `raw` for the actual response.
+- 🚨 **Daily candles reset at 00:00 KST (15:00 UTC the previous day)** — same
+  boundary as Bithumb, different from Upbit (00:00 UTC). Confirmed by
+  cross-checking identical epoch values against Bithumb's fixture (see
+  `tests/fixtures/NOTES.md`).
+
 ## Unified Interface (BaseExchange)
 
 All exchanges implement these methods:

@@ -23,6 +23,9 @@ UPBIT_BASE = "https://api.upbit.com"  # no sandbox/demo environment
 # ── Bithumb ──
 BITHUMB_BASE = "https://api.bithumb.com"  # no sandbox/demo environment; v1/v2 REST paths coexist
 
+# ── Korbit ──
+KORBIT_BASE = "https://api.korbit.co.kr"  # no sandbox/demo environment
+
 # ── Sides ──
 BUY = "buy"
 SELL = "sell"

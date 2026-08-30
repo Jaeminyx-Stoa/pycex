@@ -9,6 +9,7 @@ from pycex.constants import (
     BUY,
     BYBIT_BASE,
     BYBIT_TESTNET,
+    KORBIT_BASE,
     LIMIT,
     MARKET,
     OKX_BASE,
@@ -27,7 +28,7 @@ from pycex.exceptions import (
     RateLimitError,
     SymbolNotFoundError,
 )
-from pycex.exchanges import OKX, Binance, Bitget, Bithumb, Bybit, Upbit
+from pycex.exchanges import OKX, Binance, Bitget, Bithumb, Bybit, Korbit, Upbit
 
 __version__ = "0.1.0"
 __all__ = [
@@ -36,6 +37,7 @@ __all__ = [
     "Bitget",
     "Bithumb",
     "Bybit",
+    "Korbit",
     "OKX",
     "Upbit",
     "BINANCE_BASE",
@@ -44,6 +46,7 @@ __all__ = [
     "BITHUMB_BASE",
     "BYBIT_BASE",
     "BYBIT_TESTNET",
+    "KORBIT_BASE",
     "OKX_BASE",
     "UPBIT_BASE",
     "BUY",

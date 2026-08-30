@@ -147,6 +147,19 @@ def upbit_headers(api_key: str, secret: str, params: dict[str, Any] | None = Non
 # ── Bithumb ──
 
 
+def korbit_sign(secret: str, message: str) -> str:
+    """HMAC-SHA256 hex signature for Korbit v2's param-based auth.
+
+    Korbit has no signature/timestamp *headers* — ``timestamp`` and
+    ``signature`` travel as ordinary request parameters (query for GET/DELETE,
+    ``application/x-www-form-urlencoded`` body for POST). ``message`` must be
+    exactly the encoded query string or body that will be sent, with
+    ``signature`` itself excluded (per docs.korbit.co.kr/llms/en/rest_api.md,
+    e.g. ``timestamp=1719232467910symbol=btc_krw``).
+    """
+    return hmac_sha256(secret, message)
+
+
 def bithumb_headers(api_key: str, secret: str, params: dict[str, Any] | None = None) -> dict[str, str]:
     """Build Bithumb JWT authentication headers.
 
