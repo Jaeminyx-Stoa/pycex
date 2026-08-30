@@ -17,6 +17,9 @@ OKX_DEMO = "https://www.okx.com"  # same host, demo flag in header
 # ── Bitget ──
 BITGET_BASE = "https://api.bitget.com"  # same host for live and demo, demo via paptrading header
 
+# ── Upbit ──
+UPBIT_BASE = "https://api.upbit.com"  # no sandbox/demo environment
+
 # ── Sides ──
 BUY = "buy"
 SELL = "sell"

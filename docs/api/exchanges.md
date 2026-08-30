@@ -187,6 +187,64 @@ with OKX(api_key="KEY", secret="SECRET", passphrase="PASS", sandbox=True) as ex:
         print(f"  {asset.asset}: {asset.free}")
 ```
 
+## Upbit
+
+Upbit is a Korean-won (KRW) spot exchange — no sandbox/demo environment and
+spot only (`market_type` must be `"spot"`, `sandbox=True` raises
+`NotSupportedError`). Its native symbol format is `QUOTE-BASE` (e.g. `KRW-BTC`
+for `BTC/KRW`), the reverse of most exchanges. Private endpoints are signed
+with a JWT (HS256) rather than an HMAC header.
+
+```python
+from pycex import Upbit
+
+# Public data (no auth)
+with Upbit() as ex:
+    ticker = ex.fetch_ticker_sync("BTC/KRW")
+    ob = ex.fetch_order_book_sync("BTC/KRW", limit=10)
+    print(f"BTC: ₩{ticker.last:,.0f}")
+
+# With authentication
+with Upbit(api_key="KEY", secret="SECRET") as ex:
+    balance = ex.fetch_balance_sync()
+    order = ex.create_order_sync("BTC/KRW", "buy", "limit", 0.001, 100_000_000.0)
+    canceled = ex.cancel_order_sync(order.id, "BTC/KRW")
+```
+
+### Upbit Constructor
+
+```python
+Upbit(
+    api_key: str = "",
+    secret: str = "",
+    *,
+    sandbox: bool = False,      # always False — raises NotSupportedError if True
+    market_type: MarketType = "spot",  # must be "spot" — raises NotSupportedError otherwise
+    timeout: float = 30.0,
+)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `api_key` | `str` | `""` | Upbit access key |
+| `secret` | `str` | `""` | Upbit secret key |
+| `sandbox` | `bool` | `False` | Not supported — Upbit has no demo environment |
+| `market_type` | `"spot" \| "linear"` | `"spot"` | Only `"spot"` is supported |
+| `timeout` | `float` | `30.0` | HTTP request timeout in seconds |
+
+### Upbit Notes
+
+- **Market orders**: a market *buy* uses Upbit's `ord_type="price"` — the
+  `amount` argument to `create_order` is then the **KRW total to spend**, not
+  a BTC quantity. A market *sell* uses `ord_type="market"` with `amount` as
+  the base-asset volume, matching every other adapter.
+- **`fetch_my_trades`**: Upbit has no dedicated fills endpoint. It flattens
+  the `trades` array of completed (`state=done`) orders instead; `fee` is
+  always `0.0` (not prorated from the order's `paid_fee`) — see `raw` for the
+  original trade payload.
+- **Daily candles reset at 00:00 UTC (09:00 KST)**, not KST midnight —
+  different from Bithumb/Korbit, which reset at KST midnight.
+
 ## Unified Interface (BaseExchange)
 
 All exchanges implement these methods:

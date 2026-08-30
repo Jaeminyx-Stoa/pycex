@@ -5,7 +5,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import time
+import uuid
 from typing import Any
 from urllib.parse import urlencode
 
@@ -111,3 +113,32 @@ def bitget_headers(
     if demo:
         headers["paptrading"] = "1"
     return headers
+
+
+# ── Upbit ──
+
+
+def _b64url(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+
+def jwt_hs256(secret: str, payload: dict[str, Any]) -> str:
+    """Encode a minimal HS256 JWT: base64url(header).base64url(payload).base64url(signature)."""
+    header = _b64url(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
+    body = _b64url(json.dumps(payload, separators=(",", ":")).encode())
+    sig = _b64url(hmac.new(secret.encode(), f"{header}.{body}".encode(), hashlib.sha256).digest())
+    return f"{header}.{body}.{sig}"
+
+
+def upbit_headers(api_key: str, secret: str, params: dict[str, Any] | None = None) -> dict[str, str]:
+    """Build Upbit JWT authentication headers.
+
+    ``params`` is the exact query (or body treated as a query) sent with the
+    request; when present its urlencoded form is SHA-512 hashed into
+    ``query_hash`` per Upbit's spec. Requests with no params omit the hash.
+    """
+    payload: dict[str, Any] = {"access_key": api_key, "nonce": str(uuid.uuid4())}
+    if params:
+        payload["query_hash"] = hashlib.sha512(urlencode(params, doseq=True).encode()).hexdigest()
+        payload["query_hash_alg"] = "SHA512"
+    return {"Authorization": f"Bearer {jwt_hs256(secret, payload)}"}
