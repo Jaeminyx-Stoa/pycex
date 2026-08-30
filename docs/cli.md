@@ -3,6 +3,10 @@
 pycex includes a command-line interface for quick exchange interactions
 from the terminal.
 
+Supported exchanges: `binance`, `bybit`, `okx`, `bitget`, `upbit`, `bithumb`,
+`korbit`. All seven go through the same `pycex.factory.create_exchange`
+factory the MCP server uses, so both entry points stay in sync.
+
 ## Setup
 
 Set environment variables for the exchange, API key, and secret:
@@ -17,6 +21,18 @@ Or pass them as command-line arguments:
 
 ```bash
 pycex --exchange binance --api-key "KEY" --secret "SECRET" ticker BTCUSDT
+```
+
+Per-exchange env vars are also honored when `--api-key`/`--secret`/
+`PYCEX_API_KEY`/`PYCEX_SECRET` are left unset — useful for keeping several
+exchanges' credentials configured at once:
+
+```bash
+export PYCEX_BYBIT_API_KEY="bybit_key"
+export PYCEX_BYBIT_SECRET="bybit_secret"
+export PYCEX_OKX_API_KEY="okx_key"
+export PYCEX_OKX_SECRET="okx_secret"
+export PYCEX_OKX_PASSPHRASE="okx_passphrase"   # OKX and Bitget only
 ```
 
 ## Commands
@@ -99,8 +115,8 @@ Place a limit buy order:
 # pycex buy <symbol> <amount> <price>
 pycex buy BTCUSDT 0.001 50000
 
-# Testnet
-pycex --testnet buy BTCUSDT 0.001 50000
+# Sandbox/testnet/demo mode
+pycex --sandbox buy BTCUSDT 0.001 50000
 ```
 
 Example output:
@@ -117,8 +133,8 @@ Place a limit sell order:
 # pycex sell <symbol> <amount> <price>
 pycex sell BTCUSDT 0.001 70000
 
-# Testnet with JSON output
-pycex --testnet --json sell BTCUSDT 0.001 70000
+# Sandbox with JSON output
+pycex --sandbox --json sell BTCUSDT 0.001 70000
 ```
 
 Example output:
@@ -131,11 +147,16 @@ Sell order placed: id=87654321, BTCUSDT, amount=0.001, price=70000.0
 
 | Option | Short | Description |
 |--------|-------|-------------|
-| `--exchange` | `-e` | Exchange: `binance`, `bybit`, `okx` |
-| `--api-key` | | API key (or use `PYCEX_API_KEY`) |
-| `--secret` | | API secret (or use `PYCEX_SECRET`) |
-| `--testnet` | | Use testnet/demo mode |
+| `--exchange` | `-e` | Exchange: `binance`, `bybit`, `okx`, `bitget`, `upbit`, `bithumb`, `korbit` |
+| `--api-key` | | API key (or use `PYCEX_API_KEY` / `PYCEX_{EXCHANGE}_API_KEY`) |
+| `--secret` | | API secret (or use `PYCEX_SECRET` / `PYCEX_{EXCHANGE}_SECRET`) |
+| `--sandbox` | | Use sandbox/testnet/demo mode |
+| `--testnet` | | **Deprecated** alias for `--sandbox` (emits a `DeprecationWarning`) |
+| `--market-type` | | `spot` (default) or `linear` (USDT-margined perpetuals; Binance/Bybit/OKX/Bitget only) |
 | `--json` | | Output as JSON |
+
+An unrecognized `--exchange` value exits with status 1 and prints the list of
+valid names to stderr.
 
 ## Examples
 
@@ -145,22 +166,29 @@ Fetch tickers from multiple exchanges:
 pycex -e binance ticker BTCUSDT
 pycex -e bybit ticker BTCUSDT
 pycex -e okx ticker BTC-USDT
+pycex -e upbit ticker BTC-KRW
 ```
 
-Full trading workflow on testnet:
+Full trading workflow on sandbox:
 
 ```bash
-export PYCEX_API_KEY="testnet_key"
-export PYCEX_SECRET="testnet_secret"
+export PYCEX_API_KEY="sandbox_key"
+export PYCEX_SECRET="sandbox_secret"
 
 # Check balance
-pycex --testnet balance
+pycex --sandbox balance
 
 # Place buy order
-pycex --testnet buy BTCUSDT 0.001 50000
+pycex --sandbox buy BTCUSDT 0.001 50000
 
 # Check balance again
-pycex --testnet --json balance
+pycex --sandbox --json balance
+```
+
+Linear (USDT-margined perpetual) market:
+
+```bash
+pycex -e bybit --market-type linear ticker BTCUSDT
 ```
 
 Using JSON output for scripting:

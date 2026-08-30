@@ -11,11 +11,19 @@ Usage:
                 "env": {
                     "PYCEX_EXCHANGE": "binance",
                     "PYCEX_API_KEY": "your_api_key",
-                    "PYCEX_SECRET": "your_secret"
+                    "PYCEX_SECRET": "your_secret",
+                    "PYCEX_SANDBOX": "false",
+                    "PYCEX_MARKET_TYPE": "spot"
                 }
             }
         }
     }
+
+Exchange selection and credentials go through the same
+``pycex.factory.create_exchange`` the CLI uses — see that module for the
+``PYCEX_{EXCHANGE}_API_KEY``/``_SECRET``/``_PASSPHRASE`` per-exchange env var
+fallback used when the generic ``PYCEX_API_KEY``/``_SECRET``/``_PASSPHRASE``
+below are left unset.
 """
 
 from __future__ import annotations
@@ -27,34 +35,38 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from pycex.base import BaseExchange
+from pycex.factory import EXCHANGES, create_exchange
+from pycex.symbols import MarketType
 
 mcp = FastMCP(
     "Crypto Exchange",
     instructions=(
-        "Binance, Bybit, OKX 거래소의 시세 조회, 잔고 확인, 매수/매도 주문을 수행할 수 있습니다. "
-        "환경변수 PYCEX_EXCHANGE, PYCEX_API_KEY, PYCEX_SECRET이 필요합니다."
+        f"{', '.join(sorted(EXCHANGES))} 거래소의 시세 조회, 잔고 확인, 매수/매도 주문을 수행할 수 있습니다. "
+        "환경변수 PYCEX_EXCHANGE, PYCEX_API_KEY, PYCEX_SECRET이 필요합니다 "
+        "(OKX/Bitget은 PYCEX_PASSPHRASE도 필요). PYCEX_SANDBOX=true로 샌드박스/데모 모드를, "
+        "PYCEX_MARKET_TYPE=linear로 무기한 선물을 선택할 수 있습니다."
     ),
 )
 
+_TRUTHY = ("1", "true", "yes")
+
 
 def _get_exchange() -> BaseExchange:
-    """Initialize exchange from env vars."""
-    from pycex import OKX, Binance, Bybit
-
+    """Initialize exchange from env vars, via the shared factory."""
     exchange_name = os.environ.get("PYCEX_EXCHANGE", "binance").lower()
     api_key = os.environ.get("PYCEX_API_KEY", "")
     secret = os.environ.get("PYCEX_SECRET", "")
-    testnet = os.environ.get("PYCEX_TESTNET", "").lower() in ("1", "true", "yes")
+    passphrase = os.environ.get("PYCEX_PASSPHRASE", "")
 
-    if exchange_name == "binance":
-        return Binance(api_key=api_key, secret=secret, testnet=testnet)
-    elif exchange_name == "bybit":
-        return Bybit(api_key=api_key, secret=secret, testnet=testnet)
-    elif exchange_name == "okx":
-        passphrase = os.environ.get("PYCEX_PASSPHRASE", "")
-        return OKX(api_key=api_key, secret=secret, passphrase=passphrase, demo=testnet)
-    else:
-        raise ValueError(f"Unknown exchange: {exchange_name}. Use binance, bybit, or okx.")
+    sandbox = os.environ.get("PYCEX_SANDBOX", "").lower() in _TRUTHY
+    if not sandbox and os.environ.get("PYCEX_TESTNET", "").lower() in _TRUTHY:
+        sandbox = True  # deprecated alias, kept for existing configs
+
+    market_type: MarketType = "linear" if os.environ.get("PYCEX_MARKET_TYPE", "").lower() == "linear" else "spot"
+
+    return create_exchange(
+        exchange_name, api_key=api_key, secret=secret, passphrase=passphrase, sandbox=sandbox, market_type=market_type
+    )
 
 
 @mcp.tool()

@@ -3,6 +3,11 @@
 pycex includes a Model Context Protocol (MCP) server that exposes exchange
 operations as tools for AI assistants like Claude Desktop.
 
+Exchange construction goes through the same `pycex.factory.create_exchange`
+factory the CLI uses (`binance`, `bybit`, `okx`, `bitget`, `upbit`, `bithumb`,
+`korbit`), so both entry points always agree on supported exchanges and env
+var resolution.
+
 ## Installation
 
 ```bash
@@ -58,12 +63,26 @@ export PYCEX_SECRET="your_secret"
 pycex-mcp
 ```
 
-For testnet/demo mode:
+For sandbox/testnet/demo mode:
 
 ```bash
-export PYCEX_TESTNET=true
+export PYCEX_SANDBOX=true
 pycex-mcp
 ```
+
+`PYCEX_TESTNET=true` is still accepted as a deprecated alias for
+`PYCEX_SANDBOX` (kept for existing configs). For linear (USDT-margined
+perpetual) markets:
+
+```bash
+export PYCEX_MARKET_TYPE=linear
+pycex-mcp
+```
+
+Per-exchange env vars (`PYCEX_{EXCHANGE}_API_KEY`/`_SECRET`/`_PASSPHRASE`,
+e.g. `PYCEX_BYBIT_API_KEY`) are used as a fallback whenever the generic
+`PYCEX_API_KEY`/`PYCEX_SECRET`/`PYCEX_PASSPHRASE` are left unset — the same
+resolution order the CLI uses (see `docs/cli.md`).
 
 ## Available Tools
 
