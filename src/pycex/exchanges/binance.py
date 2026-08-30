@@ -349,10 +349,14 @@ def _parse_candle(k: list[Any]) -> Candle:
 
 
 def _parse_trade(symbol: str, t: dict[str, Any]) -> Trade:
+    # `isBuyerMaker=true` means the BUYER sat on the book as the maker, so the
+    # aggressor SOLD. `Trade.side` is the taker side everywhere else in pycex
+    # (Korbit's `isBuyerTaker`, the explicit `side` field on OKX/Bitget/Bybit),
+    # so the flag inverts here.
     return Trade(
         id=str(t["id"]),
         symbol=symbol,
-        side="buy" if t.get("isBuyerMaker") else "sell",
+        side="sell" if t.get("isBuyerMaker") else "buy",
         price=float(t["price"]),
         amount=float(t["qty"]),
         timestamp=int(t.get("time", 0)),

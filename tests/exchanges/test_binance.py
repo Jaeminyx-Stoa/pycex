@@ -21,7 +21,7 @@ from pytest_httpx import HTTPXMock
 
 from pycex.constants import BINANCE_FAPI, BINANCE_FAPI_TESTNET
 from pycex.exceptions import NotSupportedError
-from pycex.exchanges.binance import Binance, _parse_funding, _parse_market
+from pycex.exchanges.binance import Binance, _parse_funding, _parse_market, _parse_trade
 from tests.conftest import load_fixture
 
 SECRET = "s"
@@ -382,3 +382,16 @@ async def test_create_order_linear_no_position_side(httpx_mock: HTTPXMock) -> No
     assert order.side == "buy"
     assert order.type == "market"
     await ex.close()
+
+
+def test_parse_public_trade_side_is_the_taker_side() -> None:
+    """``isBuyerMaker=true`` means the BUYER was the maker, so the taker SOLD.
+
+    Every other adapter reports the taker side (Korbit's ``isBuyerTaker``, OKX/
+    Bitget/Bybit's explicit ``side``), and so does ccxt for this endpoint; this
+    parser had the mapping inverted.
+    """
+    maker_buy = _parse_trade("BTC/USDT", {"id": 1, "price": "1", "qty": "2", "time": 3, "isBuyerMaker": True})
+    taker_buy = _parse_trade("BTC/USDT", {"id": 2, "price": "1", "qty": "2", "time": 3, "isBuyerMaker": False})
+    assert maker_buy.side == "sell"
+    assert taker_buy.side == "buy"

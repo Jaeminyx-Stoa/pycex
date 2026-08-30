@@ -485,3 +485,20 @@ async def test_map_error_on_http_400_body(httpx_mock: HTTPXMock) -> None:
     with pytest.raises(AuthenticationError):
         await ex.fetch_balance()
     await ex.close()
+
+
+async def test_candles_page_is_sorted_ascending(httpx_mock: HTTPXMock) -> None:
+    """Bybit's kline list is newest-first; the unified contract is ascending, and
+    the page hook is what has to fix that (the base class only sorts the
+    multi-page path)."""
+    rows = [
+        ["1788048000000", "3", "3", "3", "3", "1", "1"],
+        ["1787961600000", "2", "2", "2", "2", "1", "1"],
+        ["1787875200000", "1", "1", "1", "1", "1", "1"],
+    ]
+    httpx_mock.add_response(json={"retCode": 0, "retMsg": "OK", "result": {"list": rows}})
+    ex = Bybit()
+    candles = await ex.fetch_candles("BTC/USDT", "1d", limit=3)
+    assert [c.timestamp for c in candles] == [1787875200000, 1787961600000, 1788048000000]
+    assert [c.close for c in candles] == [1.0, 2.0, 3.0]
+    await ex.close()

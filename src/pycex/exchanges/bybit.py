@@ -206,7 +206,8 @@ class Bybit(BaseExchange):
             params["end"] = until
         data = await self._http.get("/v5/market/kline", params=params)
         result = self._check(data)
-        return [_parse_candle(k) for k in result.get("list", [])]
+        # Bybit serves kline newest-first; the unified contract is ascending.
+        return sorted((_parse_candle(k) for k in result.get("list", [])), key=lambda c: c.timestamp)
 
     async def fetch_trades(self, symbol: str, *, limit: int = 100) -> list[Trade]:
         native = self.to_native(symbol)
