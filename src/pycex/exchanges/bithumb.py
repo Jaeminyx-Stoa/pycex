@@ -37,6 +37,7 @@ the previous day)**. Confirmed against a live recording — see
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from pycex.auth import bithumb_headers
@@ -54,7 +55,11 @@ from pycex.models.mytrade import MyTrade
 from pycex.models.order import Order
 from pycex.symbols import MarketType
 
-_AUTH_NAMES = frozenset({"jwt_verification", "expired_jwt", "NotAllowIP"})
+# `invalid_jwt` confirmed live 2026-08-30: GET /v1/accounts with a garbage bearer
+# token -> HTTP 401 {"error":{"name":"invalid_jwt"}}.
+_KST = timezone(timedelta(hours=9))
+
+_AUTH_NAMES = frozenset({"jwt_verification", "invalid_jwt", "expired_jwt", "NotAllowIP"})
 
 # fetch_my_trades fans out 1 GET per completed order to get its trades[] array
 # (see docstring below) — cap N to bound that fan-out.
@@ -72,6 +77,7 @@ class Bithumb(KrwV1Mixin, BaseExchange):
 
     name = "bithumb"
     candle_page_limit = 200
+    _auth_error_names = _AUTH_NAMES
     supported_timeframes = frozenset({"1m", "5m", "15m", "1h", "4h", "1d"})
 
     def __init__(
@@ -97,10 +103,23 @@ class Bithumb(KrwV1Mixin, BaseExchange):
     def _headers(self, params: dict[str, Any] | None = None) -> dict[str, str]:
         return bithumb_headers(self._api_key, self._secret, params)
 
+    def _format_to(self, ms: int) -> str:
+        """Bithumb's ``to`` is **naive KST** — see :meth:`KrwV1Mixin._format_to`.
+
+        Live probe 2026-08-30: ``to=2026-08-25T00:00:00Z`` and
+        ``to=2026-08-25T00:00:00+00:00`` both return HTTP **200** with
+        ``{"error":{"name":400,"message":"Invalid parameter. Check the given
+        value!"}}``; ``to=2026-08-25T00:00:00`` returns the ``2026-08-23T15:00:00``
+        bar as newest — i.e. the value was read as 2026-08-25 00:00 KST
+        (= 2026-08-24T15:00Z) and applied exclusively. Upbit reads the same
+        field as UTC.
+        """
+        return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).astimezone(_KST).strftime("%Y-%m-%dT%H:%M:%S")
+
     # ── Account ──
 
     async def fetch_balance(self) -> Balance:
-        data = await self._http.get("/v1/accounts", headers=self._headers())
+        data = self._check(await self._http.get("/v1/accounts", headers=self._headers()))
         return _parse_balance(data)
 
     # ── Trading ──
@@ -141,7 +160,7 @@ class Bithumb(KrwV1Mixin, BaseExchange):
         else:
             body["order_type"] = "market"
             body["volume"] = str(amount)
-        data = await self._http.post("/v2/orders", data=body, headers=self._headers(body))
+        data = self._check(await self._http.post("/v2/orders", data=body, headers=self._headers(body)))
         parsed = _parse_order(symbol, _normalize_order_fields(data))
         return parsed.model_copy(
             update={
@@ -163,20 +182,20 @@ class Bithumb(KrwV1Mixin, BaseExchange):
         side/type, so there is nothing honest to fill them with. Do not guess.
         """
         params = {"order_id": order_id}
-        data = await self._http.delete("/v2/order", params=params, headers=self._headers(params))
+        data = self._check(await self._http.delete("/v2/order", params=params, headers=self._headers(params)))
         order = _parse_order(symbol, _normalize_order_fields(data))
         return order.model_copy(update={"status": "cancel"})
 
     async def fetch_order(self, order_id: str, symbol: str) -> Order:
         params = {"uuid": order_id}
-        data = await self._http.get("/v1/order", params=params, headers=self._headers(params))
+        data = self._check(await self._http.get("/v1/order", params=params, headers=self._headers(params)))
         return _parse_order(symbol, data)
 
     async def fetch_open_orders(self, symbol: str | None = None) -> list[Order]:
         params: dict[str, Any] = {"state": "wait"}
         if symbol is not None:
             params["market"] = self.to_native(symbol)
-        data = await self._http.get("/v2/orders/pending", params=params, headers=self._headers(params))
+        data = self._check(await self._http.get("/v2/orders/pending", params=params, headers=self._headers(params)))
         orders = data.get("data", [])
         return [_parse_order(self.from_native(o.get("market", "")), _normalize_order_fields(o)) for o in orders]
 
@@ -199,7 +218,7 @@ class Bithumb(KrwV1Mixin, BaseExchange):
         params: dict[str, Any] = {"state": "done", "limit": n}
         if symbol is not None:
             params["market"] = self.to_native(symbol)
-        data = await self._http.get("/v2/orders/history", params=params, headers=self._headers(params))
+        data = self._check(await self._http.get("/v2/orders/history", params=params, headers=self._headers(params)))
         trades: list[MyTrade] = []
         for order in data.get("data", []):
             order_id = str(order.get("order_id", ""))
@@ -207,7 +226,9 @@ class Bithumb(KrwV1Mixin, BaseExchange):
             quote = order_symbol.split("/")[1]
             order_side = "buy" if order.get("side") == "bid" else "sell"
             detail_params = {"uuid": order_id}
-            detail = await self._http.get("/v1/order", params=detail_params, headers=self._headers(detail_params))
+            detail = self._check(
+                await self._http.get("/v1/order", params=detail_params, headers=self._headers(detail_params))
+            )
             for t in detail.get("trades", []):
                 created_at = t.get("created_at")
                 trades.append(

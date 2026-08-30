@@ -18,6 +18,7 @@ from pycex.exceptions import (
     InsufficientBalanceError,
     NotSupportedError,
     OrderNotFoundError,
+    SymbolNotFoundError,
 )
 from pycex.exchanges.bithumb import Bithumb, _map_error, _parse_candle, _parse_market, _parse_ticker
 from tests.conftest import load_fixture
@@ -348,3 +349,64 @@ async def test_fetch_balance(httpx_mock: HTTPXMock) -> None:
 def test_map_error(name: str, expected_type: type[Exception]) -> None:
     exc = _map_error(400, {"error": {"name": name, "message": "boom"}})
     assert isinstance(exc, expected_type)
+
+
+def test_map_error_int_name_is_not_a_crash() -> None:
+    """Bithumb returns an **int** ``name`` for its unknown-market envelope (live probe
+    2026-08-30: ``GET /v1/ticker?markets=KRW-NOPE`` -> HTTP **200**
+    ``{"error":{"name":404,"message":"Code not found"}}``)."""
+    exc = _map_error(200, {"error": {"name": 404, "message": "Code not found"}})
+    assert isinstance(exc, SymbolNotFoundError)
+
+
+def test_map_error_invalid_jwt_is_authentication_error() -> None:
+    """Live probe 2026-08-30: ``GET /v1/accounts`` with a garbage bearer token ->
+    HTTP 401 ``{"error":{"name":"invalid_jwt"}}``."""
+    assert isinstance(_map_error(401, {"error": {"name": "invalid_jwt"}}), AuthenticationError)
+
+
+async def test_fetch_ticker_unknown_market_raises_on_http_200(httpx_mock: HTTPXMock) -> None:
+    """Bithumb serves its error envelope with HTTP 200, so the HTTPClient
+    error_mapper (status >= 400 only) never sees it — the adapter must check."""
+    httpx_mock.add_response(status_code=200, json={"error": {"name": 404, "message": "Code not found"}})
+    ex = Bithumb()
+    with pytest.raises(SymbolNotFoundError):
+        await ex.fetch_ticker("NOPE/KRW")
+    await ex.close()
+
+
+async def test_candles_error_envelope_with_http_200_still_raises(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(status_code=200, json={"error": {"name": 400, "message": "Invalid parameter."}})
+    ex = Bithumb()
+    with pytest.raises(ExchangeError):
+        await ex._fetch_candles_page("KRW-BTC", "1d", since=None, until=None, limit=3)
+    await ex.close()
+
+
+async def test_fetch_balance_error_envelope_with_http_200_still_raises(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(status_code=200, json={"error": {"name": "jwt_verification", "message": "bad"}})
+    ex = Bithumb("k", "s")
+    with pytest.raises(AuthenticationError):
+        await ex.fetch_balance()
+    await ex.close()
+
+
+def test_format_to_is_naive_kst() -> None:
+    """🚨 Bithumb rejects **any** timezone suffix on `to` and reads a naive value as
+    KST (live probe 2026-08-30: ``to=2026-08-25T00:00:00Z`` and
+    ``to=...+00:00`` both -> HTTP 200 ``{"error":{"name":400,...}}``;
+    ``to=2026-08-25T00:00:00`` -> newest bar ``2026-08-23T15:00:00`` UTC, i.e. the
+    value was read as 2026-08-25 00:00 KST = 2026-08-24T15:00Z, exclusive).
+    Upbit reads the same field as UTC."""
+    out = Bithumb()._format_to(1_787_616_000_000)  # 2026-08-25T00:00:00Z
+    assert out == "2026-08-25T09:00:00"
+    assert not out.endswith("Z") and "+" not in out
+
+
+async def test_candles_page_to_param_is_naive_kst(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(json=load_fixture("bithumb", "candles_1d"))
+    ex = Bithumb()
+    await ex._fetch_candles_page("KRW-BTC", "1d", since=None, until=1_787_615_999_999, limit=3)
+    to = httpx_mock.get_request().url.params["to"]
+    assert to == "2026-08-25T09:00:00"
+    await ex.close()

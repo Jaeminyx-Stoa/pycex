@@ -32,6 +32,7 @@ from pycex.exceptions import (
     OrderNotFoundError,
     PyCexError,
     RateLimitError,
+    SymbolNotFoundError,
 )
 from pycex.models.balance import Balance, BalanceEntry
 from pycex.models.candle import Candle
@@ -77,6 +78,54 @@ class KrwV1Mixin:
         name: str
         _markets: dict[str, Market]
 
+    # Symbolic `error.name` values this venue uses for auth / rate-limit failures.
+    # Each concrete adapter overrides these with its own set (they differ) — see
+    # `map_krw_error`.
+    _auth_error_names: frozenset[str] = frozenset()
+    _rate_limit_error_names: frozenset[str] = frozenset()
+
+    def _check(self, data: Any) -> Any:
+        """Raise if ``data`` is a KRW-v1 error envelope, then return it unchanged.
+
+        🚨 Both venues can serve an error with **HTTP 200** — Bithumb always does
+        (live probe 2026-08-30: ``GET /v1/ticker?markets=KRW-NOPE`` -> HTTP 200
+        ``{"error":{"name":404,"message":"Code not found"}}``; Upbit serves the same
+        body with HTTP 404). ``HTTPClient`` only consults its ``error_mapper`` for
+        status >= 400, so on the 200 path nothing else would ever look at the
+        envelope and the parsers below would blow up with ``KeyError``/
+        ``AttributeError`` instead of a ``PyCexError``. Every method on this mixin
+        (and every private method of both adapters) funnels its response through
+        here.
+        """
+        if isinstance(data, dict) and "error" in data:
+            exc = map_krw_error(
+                200,
+                data,
+                exchange=self.name,
+                auth_names=self._auth_error_names,
+                rate_limit_names=self._rate_limit_error_names,
+            )
+            if exc is not None:
+                raise exc
+        return data
+
+    def _format_to(self, ms: int) -> str:
+        """Render the ``to`` candle query param for this venue.
+
+        🚨 The two venues do **not** agree on this field, despite the identical
+        path and response shape (live probes 2026-08-30):
+
+        - Upbit accepts ``2026-08-25T00:00:00Z`` *and* the bare
+          ``2026-08-25T00:00:00``, and reads both as **UTC**.
+        - Bithumb rejects **any** timezone suffix — ``...Z`` and ``...+00:00``
+          both come back as HTTP 200 ``{"error":{"name":400,"message":"Invalid
+          parameter. Check the given value!"}}`` — and reads the bare form as
+          **KST**. :class:`~pycex.exchanges.bithumb.Bithumb` overrides this.
+
+        ``to`` is exclusive of the given instant on both venues.
+        """
+        return _iso_utc(ms)
+
     def to_native(self, symbol: str) -> str:
         s = parse_symbol(symbol)
         return f"{s.quote}-{s.base}"
@@ -89,12 +138,12 @@ class KrwV1Mixin:
 
     async def fetch_ticker(self, symbol: str) -> Ticker:
         native = self.to_native(symbol)
-        data = await self._http.get("/v1/ticker", params={"markets": native})
+        data = self._check(await self._http.get("/v1/ticker", params={"markets": native}))
         return _parse_ticker(data[0])
 
     async def fetch_order_book(self, symbol: str, *, limit: int = 20) -> OrderBook:
         native = self.to_native(symbol)
-        data = await self._http.get("/v1/orderbook", params={"markets": native})
+        data = self._check(await self._http.get("/v1/orderbook", params={"markets": native}))
         return _parse_order_book(symbol, data[0], limit)
 
     async def _fetch_candles_page(
@@ -102,22 +151,24 @@ class KrwV1Mixin:
     ) -> list[Candle]:
         params: dict[str, Any] = {"market": native, "count": min(limit, 200)}
         if until is not None:
-            params["to"] = _iso_utc(until + 1)  # `to` is exclusive of the given instant
+            params["to"] = self._format_to(until + 1)  # `to` is exclusive of the given instant
         elif since is not None:
-            # Both exchanges only page backwards via `to` — anchor the page far
-            # enough ahead of `since` that the base class's forward pagination
-            # still makes progress.
-            params["to"] = _iso_utc(since + limit * _TF_MS[timeframe])
-        data = await self._http.get(f"/v1/candles/{_TF[timeframe]}", params=params)
+            # Both venues page backwards only (`to` is the sole cursor), so a
+            # `since`-anchored page is served by asking for the window that ends
+            # `limit` bars after `since`. BaseExchange.fetch_candles drives the
+            # multi-page walk with `until` (candle_paging = "backward"); this
+            # branch only fires for a direct single-page call.
+            params["to"] = self._format_to(since + limit * _TF_MS[timeframe])
+        data = self._check(await self._http.get(f"/v1/candles/{_TF[timeframe]}", params=params))
         return sorted((_parse_candle(c) for c in data), key=lambda c: c.timestamp)
 
     async def fetch_trades(self, symbol: str, *, limit: int = 100) -> list[Trade]:
         native = self.to_native(symbol)
-        data = await self._http.get("/v1/trades/ticks", params={"market": native, "count": limit})
+        data = self._check(await self._http.get("/v1/trades/ticks", params={"market": native, "count": limit}))
         return [_parse_trade(symbol, t) for t in data]
 
     async def fetch_markets(self) -> list[Market]:
-        data = await self._http.get("/v1/market/all", params={"is_details": "true"})
+        data = self._check(await self._http.get("/v1/market/all", params={"is_details": "true"}))
         markets = [_parse_market(m) for m in data]
         self._markets = {m.native: m for m in markets}
         return markets
@@ -142,10 +193,24 @@ def map_krw_error(
     ``expired_jwt``/``NotAllowIP``) — callers pass their own ``auth_names`` set.
     Names not recognized here (and not confirmed by a fixture) fall through to
     a generic ``ExchangeError``, per the task-6 ruling.
+
+    🚨 ``name`` is **not always a string**: both venues answer an unknown market
+    code with an integer ``name`` (live probe 2026-08-30: ``{"error":{"name":404,
+    "message":"Code not found"}}`` on ``/v1/ticker``, ``/v1/orderbook``,
+    ``/v1/candles/*`` and ``/v1/trades/ticks``). It is normalized with ``str()``
+    before any comparison — the substring test below used to raise
+    ``TypeError: argument of type 'int' is not iterable`` on exactly that payload.
+    ``404`` is mapped to :class:`SymbolNotFoundError` because on this API surface
+    it is what an unknown market code returns, not a wrong path.
     """
-    err = data.get("error") or {}
-    name = err.get("name", "")
+    raw_err = data.get("error")
+    if raw_err is not None and not isinstance(raw_err, dict):
+        return ExchangeError(str(raw_err), exchange=exchange)
+    err: dict[str, Any] = raw_err or {}
+    name = str(err.get("name", ""))
     message = err.get("message") or "Unknown error"
+    if name == "404":
+        return SymbolNotFoundError(f"{exchange}: {message}")
     if "insufficient_funds" in name:
         return InsufficientBalanceError(message, code=name, exchange=exchange)
     if name in auth_names:

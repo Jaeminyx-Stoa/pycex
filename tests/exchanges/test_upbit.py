@@ -20,6 +20,7 @@ from pycex.exceptions import (
     InsufficientBalanceError,
     NotSupportedError,
     OrderNotFoundError,
+    SymbolNotFoundError,
 )
 from pycex.exchanges.upbit import Upbit, _map_error, _parse_candle, _parse_market, _parse_ticker
 from tests.conftest import load_fixture
@@ -283,3 +284,51 @@ async def test_fetch_balance(httpx_mock: HTTPXMock) -> None:
 def test_map_error(name: str, expected_type: type[Exception]) -> None:
     exc = _map_error(400, {"error": {"name": name, "message": "boom"}})
     assert isinstance(exc, expected_type)
+
+
+def test_map_error_int_name_is_not_a_crash() -> None:
+    """Upbit returns an **int** ``name`` for its 404 envelope (live probe 2026-08-30:
+    ``GET /v1/ticker?markets=KRW-NOPE`` -> HTTP 404
+    ``{"error":{"name":404,"message":"Code not found"}}``). Substring checks on the
+    name used to raise ``TypeError: argument of type 'int' is not iterable``."""
+    exc = _map_error(404, {"error": {"name": 404, "message": "Code not found"}})
+    assert isinstance(exc, SymbolNotFoundError)
+
+
+def test_map_error_invalid_jwt_is_authentication_error() -> None:
+    """Live probe 2026-08-30: ``GET /v1/accounts`` with a garbage bearer token ->
+    HTTP 401 ``{"error":{"name":"invalid_jwt"}}``."""
+    assert isinstance(_map_error(401, {"error": {"name": "invalid_jwt"}}), AuthenticationError)
+
+
+async def test_fetch_ticker_unknown_market_raises(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(status_code=404, json={"error": {"name": 404, "message": "Code not found"}})
+    ex = Upbit()
+    with pytest.raises(SymbolNotFoundError):
+        await ex.fetch_ticker("NOPE/KRW")
+    await ex.close()
+
+
+async def test_error_envelope_with_http_200_still_raises(httpx_mock: HTTPXMock) -> None:
+    """A KRW-v1 error envelope must raise regardless of the HTTP status — the
+    HTTPClient error_mapper only runs for status >= 400."""
+    httpx_mock.add_response(status_code=200, json={"error": {"name": "some_unmapped_error", "message": "boom"}})
+    ex = Upbit()
+    with pytest.raises(ExchangeError):
+        await ex.fetch_order_book("BTC/KRW")
+    await ex.close()
+
+
+def test_format_to_is_utc_with_z_suffix() -> None:
+    """Upbit reads a naive `to` as UTC and accepts the `Z` suffix (live probe
+    2026-08-30: ``to=2026-08-25T00:00:00Z`` and ``to=2026-08-25T00:00:00`` both
+    return the 2026-08-24T00:00:00 bar as the newest)."""
+    assert Upbit()._format_to(1_787_616_000_000) == "2026-08-25T00:00:00Z"
+
+
+async def test_candles_page_to_param_is_utc(httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(json=load_fixture("upbit", "candles_1d"))
+    ex = Upbit()
+    await ex._fetch_candles_page("KRW-BTC", "1d", since=None, until=1_787_615_999_999, limit=3)
+    assert httpx_mock.get_request().url.params["to"] == "2026-08-25T00:00:00Z"
+    await ex.close()
