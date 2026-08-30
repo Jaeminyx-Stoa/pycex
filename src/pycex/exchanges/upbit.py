@@ -233,6 +233,10 @@ def _map_error(status: int, data: dict[str, Any]) -> PyCexError | None:
     if name == "order_not_found":
         return OrderNotFoundError(message, code=name, exchange="upbit")
     if name == "too_many_requests":
+        # Upbit normally signals rate limiting via HTTP 429, which HTTPClient already
+        # intercepts and raises RateLimitError for before this mapper ever runs. This
+        # branch only fires if Upbit ever returns the same error name on a non-429
+        # status (e.g. a 400 body during a partial outage).
         return RateLimitError(message, code=name, exchange="upbit")
     if name:
         return ExchangeError(message, code=name, exchange="upbit")
@@ -255,17 +259,20 @@ def _parse_candle(d: dict[str, Any]) -> Candle:
 
 
 def _parse_market(d: dict[str, Any]) -> Market:
+    # Upbit's market list only ever contains tradable markets — delisting means the
+    # market disappears from `/v1/market/all` entirely, it does not flip a flag on a
+    # market that's still listed. `market_event.warning` marks investor-warning status
+    # (still tradable), not delisting, so every listed market is active; the warning
+    # flag is preserved in `raw` for callers who want to surface it.
     native = d["market"]
     quote, base = native.split("-", 1)
-    market_event = d.get("market_event") or {}
-    active = market_event.get("warning") is not True
     return Market(
         symbol=spot(base, quote),
         native=native,
         base=base,
         quote=quote,
         market_type="spot",
-        active=active,
+        active=True,
         raw=d,
     )
 
@@ -275,6 +282,7 @@ def _parse_ticker(d: dict[str, Any]) -> Ticker:
     return Ticker(
         symbol=spot(base, quote),
         last=float(d.get("trade_price", 0) or 0),
+        # Upbit's /v1/ticker payload carries no bid/ask — that requires /v1/orderbook.
         bid=0.0,
         ask=0.0,
         high=float(d.get("high_price", 0) or 0),
