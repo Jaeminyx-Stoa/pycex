@@ -19,6 +19,7 @@ from pycex.exceptions import (
     InsufficientBalanceError,
     InvalidOrderError,
     NetworkError,
+    NotSupportedError,
     OrderNotFoundError,
     PyCexError,
     RateLimitError,
@@ -52,4 +53,5 @@ __all__ = [
     "OrderNotFoundError",
     "NetworkError",
     "SymbolNotFoundError",
+    "NotSupportedError",
 ]

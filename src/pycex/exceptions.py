@@ -42,3 +42,7 @@ class NetworkError(PyCexError):
 
 class SymbolNotFoundError(PyCexError):
     """Trading pair/symbol does not exist on the exchange."""
+
+
+class NotSupportedError(PyCexError):
+    """The exchange or market type does not support this operation."""
