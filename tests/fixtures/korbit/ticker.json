@@ -1,0 +1,20 @@
+{
+  "success": true,
+  "data": [
+    {
+      "symbol": "btc_krw",
+      "open": "107677000",
+      "high": "108882000",
+      "low": "107500000",
+      "close": "108519000",
+      "prevClose": "107677000",
+      "priceChange": "842000",
+      "priceChangePercent": "0.78",
+      "volume": "13.59660674",
+      "quoteVolume": "1470187510.87134",
+      "bestBidPrice": "108519000",
+      "bestAskPrice": "108581000",
+      "lastTradedAt": 1788063921374
+    }
+  ]
+}
