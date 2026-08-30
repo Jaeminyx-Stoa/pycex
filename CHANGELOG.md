@@ -18,9 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `market_type="linear"` raises `NotSupportedError` on all three.
 - **USDT-margined linear perpetual support** for **Binance**, **OKX**, and
   **Bitget** via `market_type="linear"` — linear symbols use canonical
-  `BASE/QUOTE:SETTLE` notation (e.g. `BTC/USDT:USDT`). New unified methods:
-  `fetch_positions`, `fetch_funding_rate`. `fetch_my_trades` is now part of
-  the base interface for every adapter.
+  `BASE/QUOTE:SETTLE` notation (e.g. `BTC/USDT:USDT`). New unified methods on
+  these three: `fetch_positions`, `fetch_funding_rate`. **Bybit** also gains
+  `market_type="linear"`/`category="linear"` coverage for markets, candles,
+  orders, balance, and my_trades — `fetch_positions`/`fetch_funding_rate`
+  are not wired for Bybit (out of phase-1 scope for that adapter; still
+  raise `NotSupportedError`). `fetch_my_trades` is now part of the base
+  interface for every adapter.
 - `fetch_markets()` — unified `Market` model (native symbol, base/quote,
   price tick, amount step, min notional, active flag) on every adapter.
 - Candle pagination via `since=`/`until=` on `fetch_candles` — pages

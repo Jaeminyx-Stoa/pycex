@@ -184,12 +184,14 @@ with Bybit() as ex:
 | Exchange | spot | linear | sandbox | markets | candles+pagination | orders | balance | my_trades | positions | funding |
 |----------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | Binance  | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ |
-| Bybit    | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ |
+| Bybit    | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ✕ | ✕ |
 | OKX      | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ |
 | Bitget   | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ |
 | Upbit    | ○ | ✕ | ✕ | ○ | ○ | ○ | ○ | ○ | ✕ | ✕ |
 | Bithumb  | ○ | ✕ | ✕ | ○ | ○ | ○ | ○ | ○ | ✕ | ✕ |
 | Korbit   | ○ | ✕ | ✕ | ○ | ○ | ○ | ○ | ○ | ✕ | ✕ |
+
+Bybit `linear`: markets/candles/orders/balance/my_trades all work under `category=linear`; positions/funding are not yet wired (out of phase-1 scope for this adapter) and raise `NotSupportedError` like a spot instance.
 
 `linear` = USDT-margined perpetual futures (`market_type="linear"`). Upbit,
 Bithumb, and Korbit are KRW spot exchanges only — `sandbox=True` or

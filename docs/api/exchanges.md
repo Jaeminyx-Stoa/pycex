@@ -145,6 +145,13 @@ Bybit(
 | `timeout` | `float` | `30.0` | HTTP request timeout in seconds |
 | `category` | `str \| None` | `None` | Product category (`spot`, `linear`, `inverse`); overrides `market_type` when set |
 
+`market_type="linear"` (or `category="linear"`) covers `fetch_markets`,
+`fetch_candles`, `create_order`/`cancel_order`/`fetch_order`/
+`fetch_open_orders`, `fetch_balance`, and `fetch_my_trades`.
+**`fetch_positions`/`fetch_funding_rate` are intentionally left at the
+`BaseExchange` default (raise `NotSupportedError`) — out of phase-1 scope
+for this adapter**, unlike Binance/OKX/Bitget's linear support.
+
 ### Bybit Async Example
 
 ```python
