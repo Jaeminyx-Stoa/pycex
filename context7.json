@@ -1,7 +1,7 @@
 {
   "$schema": "https://context7.com/schema/context7.json",
   "projectTitle": "pycex",
-  "description": "Unified Python wrapper for cryptocurrency exchanges (Binance, Bybit, OKX) — typed, async-first, with MCP server",
+  "description": "Unified Python wrapper for cryptocurrency exchanges (Binance, Bybit, OKX, Bitget, Upbit, Bithumb, Korbit) — typed, async-first, with MCP server",
   "folders": ["src", "docs", "examples"],
   "excludeFolders": [".git", "__pycache__", "dist", "build", ".mypy_cache", ".pytest_cache"],
   "excludeFiles": [],

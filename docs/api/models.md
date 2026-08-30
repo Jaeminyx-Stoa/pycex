@@ -308,3 +308,113 @@ async def main():
 
 asyncio.run(main())
 ```
+
+## Market
+
+Trading pair/market metadata, returned by `fetch_markets()`.
+
+```python
+from pycex import Binance
+
+with Binance() as ex:
+    markets = ex.fetch_markets_sync()
+    for m in markets[:5]:
+        print(f"{m.symbol} (native={m.native}): tick={m.price_tick}, step={m.amount_step}, active={m.active}")
+```
+
+### Market Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `symbol` | `str` | Canonical trading pair (e.g. `BTC/USDT`) |
+| `native` | `str` | Exchange-native symbol notation |
+| `base` | `str` | Base asset |
+| `quote` | `str` | Quote asset |
+| `market_type` | `str` | `"spot"` or `"linear"` |
+| `price_tick` | `float \| None` | Minimum price increment |
+| `amount_step` | `float \| None` | Minimum amount increment |
+| `min_notional` | `float \| None` | Minimum order value in quote currency |
+| `active` | `bool` | Whether the market is currently tradable |
+| `raw` | `dict` | Original exchange response |
+
+## MyTrade
+
+A fill on the caller's own account, returned by `fetch_my_trades()` — distinct
+from the public `Trade` feed.
+
+```python
+from pycex import Binance
+
+with Binance(api_key="KEY", secret="SECRET") as ex:
+    fills = ex.fetch_my_trades_sync("BTC/USDT", limit=20)
+    for f in fills:
+        print(f"{f.side} {f.amount} @ {f.price} (order {f.order_id}, fee={f.fee} {f.fee_asset})")
+```
+
+### MyTrade Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `str` | Trade/fill ID |
+| `order_id` | `str` | The order this fill belongs to |
+| `symbol` | `str` | Canonical trading pair |
+| `side` | `str` | `"buy"` or `"sell"` |
+| `price` | `float` | Execution price |
+| `amount` | `float` | Execution quantity |
+| `fee` | `float` | Fee charged for this fill (default `0.0` where the exchange doesn't report it per-fill) |
+| `fee_asset` | `str` | Asset the fee was charged in |
+| `timestamp` | `int` | Unix timestamp (ms) |
+| `raw` | `dict` | Original exchange response |
+
+## Position
+
+An open (or flat) derivatives position, returned by `fetch_positions()` on a
+`market_type="linear"` instance (Binance, OKX, Bitget). Raises
+`NotSupportedError` on a spot instance and on every KRW exchange.
+
+```python
+from pycex import OKX
+
+with OKX(api_key="KEY", secret="SECRET", passphrase="PASS", market_type="linear") as ex:
+    for p in ex.fetch_positions_sync():
+        print(f"{p.symbol}: {p.side} {p.amount} @ {p.entry_price}, uPnL={p.unrealized_pnl}")
+```
+
+### Position Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `symbol` | `str` | Canonical `BASE/QUOTE:SETTLE` trading pair |
+| `side` | `str` | `"long"`, `"short"`, or `"flat"` |
+| `amount` | `float` | Position size |
+| `entry_price` | `float \| None` | Average entry price |
+| `unrealized_pnl` | `float` | Unrealized profit/loss |
+| `leverage` | `float \| None` | Position leverage |
+| `liquidation_price` | `float \| None` | Estimated liquidation price (`None`, not `0.0`, when the exchange reports it as unset) |
+| `timestamp` | `int` | Unix timestamp (ms) |
+| `raw` | `dict` | Original exchange response |
+
+## FundingRate
+
+Perpetual swap funding rate, returned by `fetch_funding_rate()` on a
+`market_type="linear"` instance. Raises `NotSupportedError` on a spot
+instance and on every KRW exchange.
+
+```python
+from pycex import Binance
+
+with Binance(market_type="linear") as ex:
+    funding = ex.fetch_funding_rate_sync("BTC/USDT:USDT")
+    print(f"rate={funding.rate:.6f} every {funding.interval_hours}h, next={funding.next_funding_time}")
+```
+
+### FundingRate Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `symbol` | `str` | Canonical `BASE/QUOTE:SETTLE` trading pair |
+| `rate` | `float` | Per-interval funding rate as a fraction (`0.0001` = 1bp) |
+| `interval_hours` | `int` | Hours between funding payments (default `8`) |
+| `next_funding_time` | `int` | Unix timestamp (ms) of the next funding settlement |
+| `timestamp` | `int` | Unix timestamp (ms) of this reading |
+| `raw` | `dict` | Original exchange response |

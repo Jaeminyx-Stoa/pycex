@@ -29,8 +29,11 @@ from pycex.exceptions import (
     SymbolNotFoundError,
 )
 from pycex.exchanges import OKX, Binance, Bitget, Bithumb, Bybit, Korbit, Upbit
+from pycex.factory import create_exchange
+from pycex.models import FundingRate, Market, MyTrade, Position
+from pycex.symbols import parse_symbol
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = [
     "BaseExchange",
     "Binance",
@@ -63,4 +66,10 @@ __all__ = [
     "NetworkError",
     "SymbolNotFoundError",
     "NotSupportedError",
+    "FundingRate",
+    "Market",
+    "MyTrade",
+    "Position",
+    "create_exchange",
+    "parse_symbol",
 ]

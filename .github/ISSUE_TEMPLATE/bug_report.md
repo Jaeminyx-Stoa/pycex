@@ -34,10 +34,10 @@ What actually happened. Include the full error traceback if applicable.
 
 ## Environment
 
-- **pycex version**: (e.g., 0.1.0)
+- **pycex version**: (e.g., 0.2.0)
 - **Python version**: (e.g., 3.12)
 - **OS**: (e.g., Ubuntu 24.04, macOS 15, Windows 11)
-- **Exchange**: (e.g., Binance, Bybit, OKX)
+- **Exchange**: (e.g., Binance, Bybit, OKX, Bitget, Upbit, Bithumb, Korbit)
 
 ## Additional Context
 

@@ -77,15 +77,23 @@ asyncio.run(main())
 
 ## Environment Variables
 
-pycex reads the following environment variables (used by the CLI and MCP server):
+pycex reads the following environment variables (used by the CLI and MCP
+server, both of which go through the shared `pycex.factory.create_exchange`):
 
 | Variable | Description |
 |----------|-------------|
-| `PYCEX_EXCHANGE` | Exchange name: `binance`, `bybit`, or `okx` |
+| `PYCEX_EXCHANGE` | Exchange name: `binance`, `bybit`, `okx`, `bitget`, `upbit`, `bithumb`, `korbit` |
 | `PYCEX_API_KEY` | API key |
 | `PYCEX_SECRET` | API secret |
-| `PYCEX_PASSPHRASE` | OKX passphrase (OKX only) |
-| `PYCEX_TESTNET` | Set to `1` or `true` to use testnet |
+| `PYCEX_PASSPHRASE` | OKX/Bitget passphrase |
+| `PYCEX_SANDBOX` | Set to `1` or `true` to use sandbox/testnet/demo mode |
+| `PYCEX_MARKET_TYPE` | `spot` (default) or `linear` (Binance/OKX/Bitget only) |
+| `PYCEX_TESTNET` | **Deprecated** — old name for `PYCEX_SANDBOX`, still accepted |
+
+Per-exchange variants (`PYCEX_{EXCHANGE}_API_KEY`/`_SECRET`/`_PASSPHRASE`,
+e.g. `PYCEX_BYBIT_API_KEY`) are used as a fallback whenever the generic
+variable above is left unset — useful for keeping several exchanges'
+credentials configured at once.
 
 Example:
 

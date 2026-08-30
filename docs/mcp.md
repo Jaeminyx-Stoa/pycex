@@ -86,7 +86,11 @@ resolution order the CLI uses (see `docs/cli.md`).
 
 ## Available Tools
 
-The MCP server exposes the following tools:
+The MCP server exposes the following tools. `get_ticker`, `get_order_book`,
+`get_balance`, `place_order`, `cancel_order`, and `analyze_chart` operate on
+the single exchange configured via `PYCEX_EXCHANGE`/env vars (see above).
+`compare_prices` and `aggregate_balance` fan out across multiple exchanges at
+once (see below).
 
 | Tool | Description | Auth Required |
 |------|-------------|---------------|
@@ -95,6 +99,9 @@ The MCP server exposes the following tools:
 | `get_balance` | Get account balance | Yes |
 | `place_order` | Place a buy or sell order | Yes |
 | `cancel_order` | Cancel an existing order | Yes |
+| `compare_prices` | Compare a symbol's price across multiple exchanges, flag arbitrage spreads | No |
+| `analyze_chart` | SMA/RSI/Bollinger Bands/support-resistance technical analysis | No |
+| `aggregate_balance` | Combine balances across every exchange with credentials configured | Yes (per exchange) |
 
 ### get_ticker
 
@@ -135,6 +142,49 @@ place_order(symbol="BTC/USDT", side="buy", order_type="limit", amount=0.001, pri
 cancel_order(order_id="12345", symbol="BTC/USDT")
 # Returns: {"id": "12345", "symbol": "BTC/USDT", "status": "canceled"}
 ```
+
+### compare_prices
+
+Fans out `fetch_ticker` across the exchanges named in
+`PYCEX_COMPARE_EXCHANGES` (comma-separated, default
+`binance,okx,bitget,upbit,bithumb,korbit` — Bybit excluded from the default
+set) and flags a simple arbitrage spread (`spread_pct > 0.1`).
+
+```python
+# MCP tool call — canonical symbol; use "BTC/KRW" to include the KRW exchanges
+compare_prices(symbol="BTC/USDT")
+# Returns: {"symbol": "BTC/USDT", "exchanges": {"binance": {"price": ..., ...}, ...},
+#           "arbitrage": {"buy_on": "...", "sell_on": "...", "spread_pct": ..., "profitable": ...}}
+```
+
+### analyze_chart
+
+```python
+# MCP tool call — runs against the single exchange from PYCEX_EXCHANGE
+analyze_chart(symbol="BTC/USDT", timeframe="1h", period=50)
+# Returns: {"current_price": ..., "sma_20": ..., "rsi_14": ..., "volatility": ...,
+#           "bollinger_bands": {...}, "support": ..., "resistance": ..., "signal": "neutral", ...}
+```
+
+### aggregate_balance
+
+Calls `fetch_balance` on every exchange in `PYCEX_COMPARE_EXCHANGES` that has
+a `PYCEX_{EXCHANGE}_API_KEY` set, skipping (not erroring on) the rest.
+
+```python
+# MCP tool call
+aggregate_balance()
+# Returns: {"aggregated": {"BTC": {"total": ..., "free": ..., "locked": ..., "exchanges": [...]}, ...},
+#           "by_exchange": {"binance": [...], "bybit": {"skipped": "PYCEX_BYBIT_API_KEY not configured"}, ...}}
+```
+
+## Prompts
+
+The server also exposes three MCP prompts that guide an assistant through a
+multi-tool workflow: `market_analysis(symbol)` (compare prices, run technical
+analysis across timeframes, check the order book), `portfolio_review()`
+(aggregate balance across exchanges, price each holding, assess allocation),
+and `arbitrage_scan()` (scan BTC/ETH/SOL/XRP for cross-exchange spreads).
 
 ## Programmatic Usage
 

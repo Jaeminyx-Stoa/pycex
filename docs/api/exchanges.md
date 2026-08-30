@@ -737,7 +737,9 @@ canceled = ex.cancel_order_sync(order.id, "BTC/USDT")
 
 ### Timeframes
 
-Supported timeframes for candles: `1m`, `5m`, `15m`, `1h`, `4h`, `1d`, `1w`
+Supported timeframes for candles (`BaseExchange.supported_timeframes`): `1m`,
+`5m`, `15m`, `1h`, `4h`, `1d`. Requesting any other value raises
+`NotSupportedError`.
 
 ```python
 from pycex import Binance

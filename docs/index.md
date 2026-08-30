@@ -1,6 +1,7 @@
 # pycex
 
-**Unified Python wrapper for cryptocurrency exchanges** — Binance, Bybit, OKX.
+**Unified Python wrapper for cryptocurrency exchanges** — Binance, Bybit,
+OKX, Bitget, Upbit, Bithumb, Korbit.
 
 pycex provides a clean, typed, async-first Python library for interacting with
 multiple cryptocurrency exchanges through a single unified API. It features
@@ -9,13 +10,16 @@ a CLI tool.
 
 ## Features
 
-- **Unified API** — the same interface across Binance, Bybit, and OKX
+- **Unified API** — the same interface across all seven exchanges, spot and
+  USDT-margined linear perpetual (`market_type="linear"` on Binance/OKX/Bitget)
 - **Sync + Async** — both synchronous and asynchronous usage
-- **Pydantic Models** — typed responses: `Ticker`, `OrderBook`, `Balance`, `Order`, `Candle`, `Trade`
+- **Canonical Symbols** — `BASE/QUOTE` (spot) / `BASE/QUOTE:SETTLE` (linear)
+  on every exchange, never native notation
+- **Pydantic Models** — typed responses: `Ticker`, `OrderBook`, `Balance`, `Order`, `Candle`, `Trade`, `Market`, `MyTrade`, `Position`, `FundingRate`
 - **Rate Limiting** — token bucket rate limiter built into the HTTP client
 - **MCP Server** — connect to Claude Desktop and other AI assistants
 - **CLI** — terminal-based exchange operations
-- **Type Safe** — PEP 561 `py.typed`, complete type annotations
+- **Type Safe** — PEP 561 `py.typed`, complete type annotations, `mypy --strict` clean
 
 ## Quick Example
 
@@ -38,9 +42,9 @@ Switch to any exchange with the same code — no per-exchange symbol formatting
 needed, each adapter converts `BTC/USDT` to its own native notation internally:
 
 ```python
-from pycex import Binance, Bybit, OKX
+from pycex import Binance, Bitget, Bybit, OKX
 
-for ExchangeClass in [Binance, Bybit, OKX]:
+for ExchangeClass in [Binance, Bybit, OKX, Bitget]:
     with ExchangeClass() as ex:
         ticker = ex.fetch_ticker_sync("BTC/USDT")
         print(f"{ex.name}: BTC = ${ticker.last:,.2f}")
@@ -65,15 +69,24 @@ asyncio.run(main())
 
 ## Supported Exchanges
 
-Symbols are the same canonical `BASE/QUOTE` notation for every exchange
-below — "Native Format" is what each adapter sends to the exchange's own API
-internally, and is not something callers need to construct themselves.
+Symbols are the same canonical notation for every exchange below — spot
+`BASE/QUOTE`, linear perpetual `BASE/QUOTE:SETTLE`. "Native Format" is what
+each adapter sends to the exchange's own API internally, and is not
+something callers need to construct themselves.
 
-| Exchange | Native Format (internal) | Sandbox |
-|----------|---------------------------|---------|
-| Binance  | `BTCUSDT`                 | `sandbox=True` |
-| Bybit    | `BTCUSDT`                 | `sandbox=True` |
-| OKX      | `BTC-USDT`                | `sandbox=True` |
+| Exchange | Native Format (spot) | linear | Sandbox |
+|----------|------------------------|:---:|---------|
+| Binance  | `BTCUSDT`   | ○ | `sandbox=True` |
+| Bybit    | `BTCUSDT`   | ○ | `sandbox=True` |
+| OKX      | `BTC-USDT`  | ○ | `sandbox=True` |
+| Bitget   | `BTCUSDT`   | ○ | `sandbox=True` |
+| Upbit    | `KRW-BTC`   | ✕ | not supported (KRW spot only) |
+| Bithumb  | `KRW-BTC`   | ✕ | not supported (KRW spot only) |
+| Korbit   | `btc_krw`   | ✕ | not supported (KRW spot only) |
+
+See `docs/api/exchanges.md` for the full support matrix (markets, candle
+pagination, orders, balance, my_trades, positions, funding) and per-venue
+quirks.
 
 ## Installation
 

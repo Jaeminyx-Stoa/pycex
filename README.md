@@ -1,18 +1,20 @@
 # pycex
 
-Unified Python wrapper for cryptocurrency exchanges — **Binance**, **Bybit**, **OKX**.
+Unified Python wrapper for cryptocurrency exchanges — **Binance**, **Bybit**,
+**OKX**, **Bitget**, **Upbit**, **Bithumb**, **Korbit**.
 
 ccxt의 복잡한 코드베이스 대신, Pydantic 타입 안전성과 async-first 설계, 내장 rate limiter, MCP 서버를 제공하는 깔끔한 Python 라이브러리입니다.
 
 ## Features
 
-- **Unified API** — 동일한 인터페이스로 3개 거래소 사용
-- **Sync + Async** — 동기/비동기 모두 지원
-- **Pydantic Models** — `Ticker`, `OrderBook`, `Balance`, `Order`, `Candle`, `Trade`
-- **Rate Limiting** — Token bucket rate limiter 내장
+- **Unified API** — 동일한 인터페이스로 7개 거래소 사용 (spot + USDT-margined perpetual)
+- **Sync + Async** — 동기/비동기 모두 지원 (매 메서드마다 자동 생성된 `_sync` 트윈)
+- **Canonical Symbols** — 모든 거래소에서 동일한 `BASE/QUOTE`(spot) / `BASE/QUOTE:SETTLE`(linear) 표기
+- **Pydantic Models** — `Ticker`, `OrderBook`, `Balance`, `Order`, `Candle`, `Trade`, `Market`, `MyTrade`, `Position`, `FundingRate`
+- **Rate Limiting** — Token bucket rate limiter 내장 (거래소별 기본값)
 - **MCP Server** — Claude Desktop 등 AI 어시스턴트 연동
 - **CLI** — 터미널에서 시세, 잔고, 주문
-- **Type Safe** — PEP 561 `py.typed`, 완전한 타입 힌트
+- **Type Safe** — PEP 561 `py.typed`, 완전한 타입 힌트, `mypy --strict` 통과
 
 ## Installation
 
@@ -24,6 +26,12 @@ pip install pycex[mcp]
 ```
 
 ## Quick Start
+
+심볼은 거래소와 무관하게 항상 정규(canonical) 표기를 씁니다 — spot은
+`BASE/QUOTE`(예: `BTC/USDT`), USDT 무기한 선물은 `BASE/QUOTE:SETTLE`(예:
+`BTC/USDT:USDT`). 각 어댑터가 내부적으로 거래소별 네이티브 표기(`BTCUSDT`,
+`BTC-USDT`, `KRW-BTC` 등)로 변환하므로, 네이티브 표기를 직접 넘기면
+`SymbolNotFoundError`가 발생합니다.
 
 ```python
 from pycex import Binance
@@ -37,17 +45,24 @@ with Binance() as ex:
     print(f"  Volume: {ticker.volume:,.2f}")
 ```
 
-## Multi-Exchange
-
-동일한 인터페이스로 거래소를 교체할 수 있습니다. 심볼은 거래소와 무관하게 항상
-`BASE/QUOTE` 표준 표기(예: `BTC/USDT`)를 씁니다 — 각 어댑터가 내부적으로
-거래소별 네이티브 표기(`BTCUSDT`, `BTC-USDT` 등)로 변환합니다:
+Or via the shared factory, by exchange name (used internally by the CLI and MCP server):
 
 ```python
-from pycex import Binance, Bybit, OKX
+from pycex import create_exchange
 
-# 같은 코드로 다른 거래소 사용
-for ExchangeClass in [Binance, Bybit, OKX]:
+with create_exchange("upbit") as ex:
+    ticker = ex.fetch_ticker_sync("BTC/KRW")
+    print(f"BTC: ₩{ticker.last:,.0f}")
+```
+
+## Multi-Exchange
+
+동일한 인터페이스로 거래소를 교체할 수 있습니다:
+
+```python
+from pycex import Binance, Bitget, Bybit, OKX
+
+for ExchangeClass in [Binance, Bybit, OKX, Bitget]:
     with ExchangeClass() as ex:
         ticker = ex.fetch_ticker_sync("BTC/USDT")
         print(f"{ex.name}: BTC = ${ticker.last:,.2f}")
@@ -108,40 +123,93 @@ with Binance(api_key="YOUR_KEY", secret="YOUR_SECRET", sandbox=True) as ex:
     print(f"Canceled: {canceled.id}")
 ```
 
-## Candles (OHLCV)
+## USDT-Margined Perpetuals (`market_type="linear"`)
+
+Binance, OKX, Bitget expose USDT-margined linear perpetual futures alongside
+spot, selected via `market_type="linear"` on the constructor. Linear symbols
+use `BASE/QUOTE:SETTLE` notation:
+
+```python
+from pycex import OKX
+
+with OKX(api_key="KEY", secret="SECRET", passphrase="PASS", market_type="linear") as ex:
+    funding = ex.fetch_funding_rate_sync("BTC/USDT:USDT")
+    print(f"funding rate: {funding.rate:.6f} (next {funding.next_funding_time})")
+
+    positions = ex.fetch_positions_sync()
+    for p in positions:
+        print(f"{p.symbol}: {p.side} {p.amount} @ {p.entry_price}, uPnL={p.unrealized_pnl}")
+
+    order = ex.create_order_sync("BTC/USDT:USDT", "buy", "market", 1)
+```
+
+`fetch_positions`/`fetch_funding_rate` raise `NotSupportedError` on a `"spot"`
+instance and on every KRW exchange (Upbit/Bithumb/Korbit are spot-only). See
+`docs/api/exchanges.md` for per-venue quirks (contracts-vs-quantity on OKX,
+hedge-mode caveats, etc.).
+
+## Candles (OHLCV) and Pagination
 
 ```python
 from pycex import Bybit
 
 with Bybit() as ex:
-    candles = ex.fetch_order_book_sync("BTC/USDT", limit=5)
     # 일봉
-    candles = ex.fetch_candles("BTC/USDT", "1d", limit=30)  # async
+    candles = ex.fetch_candles_sync("BTC/USDT", "1d", limit=30)
+
+    # since/until 를 주면 페이지네이션이 자동으로 이어집니다 (중복 제거, 시간순 정렬)
+    paged = ex.fetch_candles_sync("BTC/USDT", "1d", since=1_735_689_600_000, until=1_738_368_000_000)
 ```
 
-지원 timeframe: `1m`, `5m`, `15m`, `1h`, `4h`, `1d`, `1w`
+지원 timeframe: `1m`, `5m`, `15m`, `1h`, `4h`, `1d`
 
-## Bybit
+🚨 **일봉(1d) 경계가 거래소마다 다릅니다** — `Candle.timestamp`는 항상 봉 시작
+시각(UTC epoch ms)이지만, "오늘"이 어디서 끊기는지는 거래소별로 다릅니다:
 
-```python
-from pycex import Bybit
+| Exchange | Daily-bar boundary |
+|----------|---------------------|
+| Upbit | 00:00 UTC (= 09:00 KST) |
+| Bithumb | 00:00 KST (= 15:00 UTC, 전날) |
+| Korbit | 00:00 KST (= 15:00 UTC, 전날) |
+| Binance | 00:00 UTC |
+| OKX | 00:00 UTC |
+| Bitget | 00:00 UTC |
 
-with Bybit(api_key="KEY", secret="SECRET") as ex:
-    ticker = ex.fetch_ticker_sync("BTC/USDT")
-    balance = ex.fetch_balance_sync()
-    order = ex.create_order_sync("BTC/USDT", "buy", "limit", 0.001, 50000.0)
-```
+같은 필드 이름(`candle_date_time_utc`)을 반환해도 Upbit과 Bithumb의 일봉 경계는
+다르므로, KST 캘린더 날짜 하나에 대응하는 원장 봉이 두 거래소에서 서로 다를 수
+있습니다. 자세한 근거는 `tests/fixtures/NOTES.md`를 참고하세요.
 
-## OKX
+## Supported Exchanges
 
-```python
-from pycex import OKX
+| Exchange | spot | linear | sandbox | markets | candles+pagination | orders | balance | my_trades | positions | funding |
+|----------|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| Binance  | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ |
+| Bybit    | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ |
+| OKX      | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ |
+| Bitget   | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ | ○ |
+| Upbit    | ○ | ✕ | ✕ | ○ | ○ | ○ | ○ | ○ | ✕ | ✕ |
+| Bithumb  | ○ | ✕ | ✕ | ○ | ○ | ○ | ○ | ○ | ✕ | ✕ |
+| Korbit   | ○ | ✕ | ✕ | ○ | ○ | ○ | ○ | ○ | ✕ | ✕ |
 
-with OKX(api_key="KEY", secret="SECRET", passphrase="PASS") as ex:
-    ticker = ex.fetch_ticker_sync("BTC/USDT")
-    balance = ex.fetch_balance_sync()
-    order = ex.create_order_sync("BTC/USDT", "buy", "limit", 0.001, 50000.0)
-```
+`linear` = USDT-margined perpetual futures (`market_type="linear"`). Upbit,
+Bithumb, and Korbit are KRW spot exchanges only — `sandbox=True` or
+`market_type="linear"` raises `NotSupportedError` on all three;
+`fetch_positions`/`fetch_funding_rate` raise `NotSupportedError` on every spot
+instance (shared `BaseExchange` default).
+
+심볼은 모든 거래소에서 동일하게 표준 표기(`BASE/QUOTE`, 예: `BTC/USDT`)를 씁니다 —
+아래 "Native Format"은 각 어댑터가 내부적으로 거래소 API에 보내는 표기일 뿐,
+호출부에서 직접 쓰지 않습니다.
+
+| Exchange | Native Format (spot) | Native Format (linear) |
+|----------|-----------------------|--------------------------|
+| Binance | `BTCUSDT` | `BTCUSDT` |
+| Bybit | `BTCUSDT` | `BTCUSDT` |
+| OKX | `BTC-USDT` | `BTC-USDT-SWAP` |
+| Bitget | `BTCUSDT` | `BTCUSDT` |
+| Upbit | `KRW-BTC` | — |
+| Bithumb | `KRW-BTC` | — |
+| Korbit | `btc_krw` | — |
 
 ## Raw API Response
 
@@ -168,13 +236,16 @@ pycex balance                      # 잔고
 pycex buy BTC/USDT 0.001 50000     # 매수
 pycex sell BTC/USDT 0.001 55000    # 매도
 
-# 거래소 지정
+# 거래소 지정 (binance, bybit, okx, bitget, upbit, bithumb, korbit)
 pycex -e bybit ticker BTC/USDT
 pycex -e okx ticker BTC/USDT
+pycex -e upbit ticker BTC/KRW
 
-# Testnet + JSON
-pycex --testnet --json ticker BTC/USDT
+# Sandbox + linear market type + JSON
+pycex --sandbox --market-type linear -e okx --json ticker BTC/USDT:USDT
 ```
+
+See `docs/cli.md` for the full command reference.
 
 ## MCP Server (Claude Desktop)
 
@@ -195,37 +266,25 @@ pycex --testnet --json ticker BTC/USDT
 }
 ```
 
-### Available MCP Tools
-
-| Tool | Description |
-|------|-------------|
-| `get_ticker` | 시세 조회 |
-| `get_order_book` | 호가창 조회 |
-| `get_balance` | 잔고 조회 |
-| `place_order` | 매수/매도 주문 |
-| `cancel_order` | 주문 취소 |
-
-## Supported Exchanges
-
-심볼은 모든 거래소에서 동일하게 표준 표기(`BASE/QUOTE`, 예: `BTC/USDT`)를 씁니다 —
-아래 "Native Format"은 각 어댑터가 내부적으로 거래소 API에 보내는 표기일 뿐,
-호출부에서 직접 쓰지 않습니다.
-
-| Exchange | Native Format (internal) | Sandbox |
-|----------|--------------------------|---------|
-| Binance | `BTCUSDT` | `sandbox=True` |
-| Bybit | `BTCUSDT` | `sandbox=True` |
-| OKX | `BTC-USDT` | `sandbox=True` |
+See `docs/mcp.md` for the full tool list (ticker/order book/balance/orders,
+plus multi-exchange `compare_prices`/`aggregate_balance` and chart-analysis
+tools) and prompt reference.
 
 ## Environment Variables
 
+모든 인증 값은 환경변수 이름으로만 지칭됩니다 — 값을 코드나 로그에 쓰지 마세요.
+일반(generic) 변수와 거래소별(per-exchange) 변수가 함께 지원되며, 거래소별
+변수가 있으면 그쪽이 우선합니다 (CLI/MCP 공용 `pycex.factory.create_exchange`):
+
 | Variable | Description |
 |----------|-------------|
-| `PYCEX_EXCHANGE` | 거래소 이름 (`binance`, `bybit`, `okx`) |
-| `PYCEX_API_KEY` | API 키 |
-| `PYCEX_SECRET` | API 시크릿 |
-| `PYCEX_PASSPHRASE` | OKX passphrase |
-| `PYCEX_TESTNET` | `1`/`true` — 테스트넷 사용 |
+| `PYCEX_EXCHANGE` | 거래소 이름 (`binance`, `bybit`, `okx`, `bitget`, `upbit`, `bithumb`, `korbit`) |
+| `PYCEX_API_KEY` / `PYCEX_{EXCHANGE}_API_KEY` | API 키 (예: `PYCEX_BYBIT_API_KEY`) |
+| `PYCEX_SECRET` / `PYCEX_{EXCHANGE}_SECRET` | API 시크릿 |
+| `PYCEX_PASSPHRASE` / `PYCEX_{EXCHANGE}_PASSPHRASE` | OKX/Bitget passphrase |
+| `PYCEX_SANDBOX` | `1`/`true` — 샌드박스/데모/테스트넷 사용 |
+| `PYCEX_MARKET_TYPE` | `spot`(기본) 또는 `linear` |
+| `PYCEX_TESTNET` | **Deprecated** — `PYCEX_SANDBOX`의 예전 이름 (여전히 동작) |
 
 ## License
 
