@@ -156,8 +156,10 @@ async def test_create_order_market_buy_uses_price_ord_type(httpx_mock: HTTPXMock
     order = await ex.create_order("BTC/KRW", "buy", "market", 100_000)
     req = httpx_mock.get_request()
     body = json.loads(req.content)
-    assert body == {"market": "KRW-BTC", "side": "bid", "ord_type": "price", "price": "100000"}
+    expected_body = {"market": "KRW-BTC", "side": "bid", "ord_type": "price", "price": "100000"}
+    assert body == expected_body
     assert "volume" not in body
+    _assert_bearer_query_hash(req.headers, expected_body)
     assert order.symbol == "BTC/KRW"
     await ex.close()
 
@@ -170,8 +172,10 @@ async def test_create_order_market_sell_uses_market_ord_type(httpx_mock: HTTPXMo
     order = await ex.create_order("BTC/KRW", "sell", "market", 0.02)
     req = httpx_mock.get_request()
     body = json.loads(req.content)
-    assert body == {"market": "KRW-BTC", "side": "ask", "ord_type": "market", "volume": "0.02"}
+    expected_body = {"market": "KRW-BTC", "side": "ask", "ord_type": "market", "volume": "0.02"}
+    assert body == expected_body
     assert "price" not in body
+    _assert_bearer_query_hash(req.headers, expected_body)
     assert order.symbol == "BTC/KRW"
     await ex.close()
 
@@ -236,6 +240,8 @@ async def test_fetch_my_trades_flattens_two_orders(httpx_mock: HTTPXMock) -> Non
     trades = await ex.fetch_my_trades("BTC/KRW")
     req = httpx_mock.get_request()
     assert req.url.params["state"] == "done" and req.url.params["market"] == "KRW-BTC"
+    expected_params = {"state": "done", "limit": 100, "market": "KRW-BTC"}
+    _assert_bearer_query_hash(req.headers, expected_params)
     assert len(trades) == 2
     assert trades[0].id == "trade-1" and trades[0].order_id == "order-1" and trades[0].fee_asset == "KRW"
     assert trades[1].id == "trade-2" and trades[1].order_id == "order-2" and trades[1].fee_asset == "KRW"
