@@ -23,6 +23,8 @@ class ExchangeError(PyCexError):
 class RateLimitError(ExchangeError):
     """Request was rate-limited by the exchange."""
 
+    retry_after: float | None = None
+
 
 class InsufficientBalanceError(ExchangeError):
     """Insufficient funds for the requested operation."""

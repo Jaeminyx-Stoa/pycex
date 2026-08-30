@@ -97,8 +97,8 @@ class Binance(BaseExchange):
 
     async def cancel_order(self, order_id: str, symbol: str) -> Order:
         params = self._signed_params({"symbol": symbol, "orderId": order_id})
-        resp = await self._http._client.delete("/api/v3/order", params=params, headers=self._auth_headers())
-        return _parse_order(resp.json())
+        data = await self._http.delete("/api/v3/order", params=params, headers=self._auth_headers())
+        return _parse_order(data)
 
     async def fetch_order(self, order_id: str, symbol: str) -> Order:
         params = self._signed_params({"symbol": symbol, "orderId": order_id})
@@ -151,8 +151,8 @@ class Binance(BaseExchange):
 
     def cancel_order_sync(self, order_id: str, symbol: str) -> Order:
         params = self._signed_params({"symbol": symbol, "orderId": order_id})
-        resp = self._http._sync_client.delete("/api/v3/order", params=params, headers=self._auth_headers())
-        return _parse_order(resp.json())
+        data = self._http.sync_delete("/api/v3/order", params=params, headers=self._auth_headers())
+        return _parse_order(data)
 
 
 # ── Parsers ──

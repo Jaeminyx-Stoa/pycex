@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from typing import Any
 
 import httpx
 
-from pycex.exceptions import ExchangeError, NetworkError, RateLimitError
+from pycex.exceptions import ExchangeError, NetworkError, PyCexError, RateLimitError
 
 logger = logging.getLogger("pycex")
 
@@ -61,12 +62,14 @@ class HTTPClient:
         timeout: float = 30.0,
         rate: float = 10.0,
         default_headers: dict[str, str] | None = None,
+        error_mapper: Callable[[int, dict[str, Any]], PyCexError | None] | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._default_headers = default_headers or {}
         self._client = httpx.AsyncClient(base_url=self._base_url, timeout=timeout, headers=self._default_headers)
         self._sync_client = httpx.Client(base_url=self._base_url, timeout=timeout, headers=self._default_headers)
         self._limiter = RateLimiter(rate)
+        self._error_mapper = error_mapper
 
     async def get(
         self, path: str, *, params: dict[str, Any] | None = None, headers: dict[str, str] | None = None
@@ -93,12 +96,32 @@ class HTTPClient:
         except httpx.HTTPError as e:
             raise NetworkError(str(e)) from e
 
+    async def delete(
+        self, path: str, *, params: dict[str, Any] | None = None, headers: dict[str, str] | None = None
+    ) -> Any:
+        await self._limiter.acquire()
+        try:
+            resp = await self._client.delete(path, params=params, headers=headers)
+            return self._handle_response(resp)
+        except httpx.HTTPError as e:
+            raise NetworkError(str(e)) from e
+
     def sync_get(
         self, path: str, *, params: dict[str, Any] | None = None, headers: dict[str, str] | None = None
     ) -> Any:
         self._limiter.wait()
         try:
             resp = self._sync_client.get(path, params=params, headers=headers)
+            return self._handle_response(resp)
+        except httpx.HTTPError as e:
+            raise NetworkError(str(e)) from e
+
+    def sync_delete(
+        self, path: str, *, params: dict[str, Any] | None = None, headers: dict[str, str] | None = None
+    ) -> Any:
+        self._limiter.wait()
+        try:
+            resp = self._sync_client.delete(path, params=params, headers=headers)
             return self._handle_response(resp)
         except httpx.HTTPError as e:
             raise NetworkError(str(e)) from e
@@ -121,12 +144,22 @@ class HTTPClient:
     def _handle_response(self, resp: httpx.Response) -> Any:
         """Return the parsed JSON body. Shape (dict or list) depends on the endpoint."""
         if resp.status_code == 429:
-            raise RateLimitError("Rate limit exceeded", exchange="")
-        data: Any = resp.json()
+            ra = resp.headers.get("Retry-After")
+            err = RateLimitError("Rate limit exceeded", exchange="")
+            err.retry_after = float(ra) if ra and ra.replace(".", "", 1).isdigit() else None
+            raise err
+        try:
+            data: Any = resp.json()
+        except ValueError:
+            data = {"raw_text": resp.text}
         if resp.status_code >= 400:
-            err: dict[str, Any] = data if isinstance(data, dict) else {}
-            msg = err.get("msg") or err.get("message") or str(data)
-            code = err.get("code") or err.get("ret_code") or resp.status_code
+            err_dict: dict[str, Any] = data if isinstance(data, dict) else {}
+            if self._error_mapper is not None:
+                mapped = self._error_mapper(resp.status_code, err_dict)
+                if mapped is not None:
+                    raise mapped
+            msg = err_dict.get("msg") or err_dict.get("message") or str(data)
+            code = err_dict.get("code") or err_dict.get("ret_code") or resp.status_code
             raise ExchangeError(msg, code=code)
         return data
 

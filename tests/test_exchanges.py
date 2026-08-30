@@ -5,6 +5,7 @@ from pytest_httpx import HTTPXMock
 
 from pycex import OKX, Binance, Bitget, Bybit
 from pycex.constants import BINANCE_BASE, BINANCE_TESTNET, BITGET_BASE, BYBIT_BASE, BYBIT_TESTNET, OKX_BASE
+from pycex.exceptions import ExchangeError
 
 
 class TestBinanceInit:
@@ -20,6 +21,16 @@ class TestBinanceInit:
     def test_context_manager(self) -> None:
         with Binance(api_key="k", secret="s") as ex:
             assert ex.name == "binance"
+
+
+class TestBinanceCancelOrder:
+    async def test_cancel_order_400_raises_exchange_error(self, httpx_mock: HTTPXMock) -> None:
+        httpx_mock.add_response(method="DELETE", status_code=400, json={"code": -2011, "msg": "Unknown order sent."})
+        ex = Binance(api_key="k", secret="s")
+        with pytest.raises(ExchangeError) as e:
+            await ex.cancel_order("1", "BTCUSDT")
+        assert e.value.code == -2011
+        await ex._http.close()
 
 
 class TestBybitInit:
