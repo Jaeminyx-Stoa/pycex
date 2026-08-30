@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
@@ -181,7 +182,7 @@ def compare_prices(symbol: str) -> str:
     okx_symbol = symbol.replace("USDT", "-USDT") if "-" not in symbol else symbol
     spot_symbol = symbol.replace("-", "") if "-" in symbol else symbol
 
-    results: dict = {}
+    results: dict[str, Any] = {}
     for name, cls, sym in [
         ("binance", Binance, spot_symbol),
         ("bybit", Bybit, spot_symbol),
@@ -196,7 +197,7 @@ def compare_prices(symbol: str) -> str:
             results[name] = {"error": str(e)}
 
     prices = {k: v["price"] for k, v in results.items() if "price" in v}
-    arb: dict = {}
+    arb: dict[str, Any] = {}
     if len(prices) >= 2:
         cheapest = min(prices, key=prices.get)  # type: ignore[arg-type]
         most_expensive = max(prices, key=prices.get)  # type: ignore[arg-type]
@@ -318,8 +319,8 @@ def aggregate_balance() -> str:
         ),
     ]
 
-    all_assets: dict[str, dict] = {}
-    exchange_balances: dict = {}
+    all_assets: dict[str, dict[str, Any]] = {}
+    exchange_balances: dict[str, Any] = {}
 
     for name, cls, kwargs in exchanges_config:
         if not kwargs.get("api_key"):

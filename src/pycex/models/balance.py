@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel
 
 
@@ -21,7 +23,7 @@ class Balance(BaseModel):
     """Unified account balance."""
 
     assets: list[BalanceEntry]
-    raw: dict = {}  # noqa: RUF012
+    raw: dict[str, Any] = {}  # noqa: RUF012
 
     def get(self, asset: str) -> BalanceEntry | None:
         for entry in self.assets:

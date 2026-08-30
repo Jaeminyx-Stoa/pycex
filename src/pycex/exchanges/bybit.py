@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from pycex.auth import bybit_headers
 from pycex.base import BaseExchange
@@ -50,15 +51,16 @@ class Bybit(BaseExchange):
             broker_headers["Referer"] = BYBIT_REFERRAL_CODE
         self._http = HTTPClient(base, timeout=timeout, rate=10.0, default_headers=broker_headers)
 
-    def _check(self, data: dict) -> dict:
+    def _check(self, data: dict[str, Any]) -> dict[str, Any]:
         if data.get("retCode", 0) != 0:
             raise ExchangeError(data.get("retMsg", "Unknown error"), code=data.get("retCode"), exchange="bybit")
-        return data.get("result", data)
+        result: dict[str, Any] = data.get("result", data)
+        return result
 
     def _auth_get_headers(self, query: str) -> dict[str, str]:
         return bybit_headers(self._api_key, self._secret, query)
 
-    def _auth_post_headers(self, body: dict) -> dict[str, str]:
+    def _auth_post_headers(self, body: dict[str, Any]) -> dict[str, str]:
         payload = json.dumps(body)
         headers = bybit_headers(self._api_key, self._secret, payload)
         headers["Content-Type"] = "application/json"
@@ -70,7 +72,7 @@ class Bybit(BaseExchange):
         params = {"category": self._category, "symbol": symbol}
         data = await self._http.get("/v5/market/tickers", params=params)
         result = self._check(data)
-        return _parse_ticker(result["list"][0])
+        return _parse_ticker(result["list[Any]"][0])
 
     async def fetch_order_book(self, symbol: str, *, limit: int = 20) -> OrderBook:
         params = {"category": self._category, "symbol": symbol, "limit": limit}
@@ -87,13 +89,13 @@ class Bybit(BaseExchange):
         }
         data = await self._http.get("/v5/market/kline", params=params)
         result = self._check(data)
-        return [_parse_candle(k) for k in result.get("list", [])]
+        return [_parse_candle(k) for k in result.get("list[Any]", [])]
 
     async def fetch_trades(self, symbol: str, *, limit: int = 100) -> list[Trade]:
         params = {"category": self._category, "symbol": symbol, "limit": limit}
         data = await self._http.get("/v5/market/recent-trade", params=params)
         result = self._check(data)
-        return [_parse_trade(t) for t in result.get("list", [])]
+        return [_parse_trade(t) for t in result.get("list[Any]", [])]
 
     # ── Account ──
 
@@ -109,7 +111,7 @@ class Bybit(BaseExchange):
     async def create_order(
         self, symbol: str, side: str, order_type: str, amount: float, price: float | None = None
     ) -> Order:
-        body: dict = {
+        body: dict[str, Any] = {
             "category": self._category,
             "symbol": symbol,
             "side": "Buy" if side.lower() == "buy" else "Sell",
@@ -142,18 +144,18 @@ class Bybit(BaseExchange):
         params = {"category": self._category, "symbol": symbol, "orderId": order_id}
         data = await self._http.get("/v5/order/realtime", params=params, headers=self._auth_get_headers(query))
         result = self._check(data)
-        if result.get("list"):
-            return _parse_order(result["list"][0])
+        if result.get("list[Any]"):
+            return _parse_order(result["list[Any]"][0])
         return Order(id=order_id, symbol=symbol, side="", type="", amount=0)
 
     async def fetch_open_orders(self, symbol: str | None = None) -> list[Order]:
-        params: dict = {"category": self._category}
+        params: dict[str, Any] = {"category": self._category}
         if symbol:
             params["symbol"] = symbol
         query = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
         data = await self._http.get("/v5/order/realtime", params=params, headers=self._auth_get_headers(query))
         result = self._check(data)
-        return [_parse_order(o) for o in result.get("list", [])]
+        return [_parse_order(o) for o in result.get("list[Any]", [])]
 
     # ── Sync ──
 
@@ -161,7 +163,7 @@ class Bybit(BaseExchange):
         params = {"category": self._category, "symbol": symbol}
         data = self._http.sync_get("/v5/market/tickers", params=params)
         result = self._check(data)
-        return _parse_ticker(result["list"][0])
+        return _parse_ticker(result["list[Any]"][0])
 
     def fetch_candles_sync(self, symbol: str, timeframe: str = "1h", *, limit: int = 100) -> list[Candle]:
         params = {
@@ -172,7 +174,7 @@ class Bybit(BaseExchange):
         }
         data = self._http.sync_get("/v5/market/kline", params=params)
         result = self._check(data)
-        return [_parse_candle(k) for k in result.get("list", [])]
+        return [_parse_candle(k) for k in result.get("list[Any]", [])]
 
     def fetch_order_book_sync(self, symbol: str, *, limit: int = 20) -> OrderBook:
         params = {"category": self._category, "symbol": symbol, "limit": limit}
@@ -190,7 +192,7 @@ class Bybit(BaseExchange):
     def create_order_sync(
         self, symbol: str, side: str, order_type: str, amount: float, price: float | None = None
     ) -> Order:
-        body: dict = {
+        body: dict[str, Any] = {
             "category": self._category,
             "symbol": symbol,
             "side": "Buy" if side.lower() == "buy" else "Sell",
@@ -222,7 +224,7 @@ class Bybit(BaseExchange):
 # ── Parsers ──
 
 
-def _parse_ticker(d: dict) -> Ticker:
+def _parse_ticker(d: dict[str, Any]) -> Ticker:
     return Ticker(
         symbol=d.get("symbol", ""),
         last=float(d.get("lastPrice", 0)),
@@ -236,7 +238,7 @@ def _parse_ticker(d: dict) -> Ticker:
     )
 
 
-def _parse_order_book(symbol: str, d: dict) -> OrderBook:
+def _parse_order_book(symbol: str, d: dict[str, Any]) -> OrderBook:
     return OrderBook(
         symbol=symbol,
         bids=[OrderBookEntry(price=float(b[0]), amount=float(b[1])) for b in d.get("b", [])],
@@ -246,7 +248,7 @@ def _parse_order_book(symbol: str, d: dict) -> OrderBook:
     )
 
 
-def _parse_candle(k: list) -> Candle:
+def _parse_candle(k: list[Any]) -> Candle:
     return Candle(
         timestamp=int(k[0]),
         open=float(k[1]),
@@ -257,7 +259,7 @@ def _parse_candle(k: list) -> Candle:
     )
 
 
-def _parse_trade(t: dict) -> Trade:
+def _parse_trade(t: dict[str, Any]) -> Trade:
     return Trade(
         id=t.get("execId", ""),
         symbol=t.get("symbol", ""),
@@ -268,9 +270,9 @@ def _parse_trade(t: dict) -> Trade:
     )
 
 
-def _parse_balance(result: dict, raw: dict) -> Balance:
+def _parse_balance(result: dict[str, Any], raw: dict[str, Any]) -> Balance:
     entries = []
-    for account in result.get("list", []):
+    for account in result.get("list[Any]", []):
         for coin in account.get("coin", []):
             free = float(coin.get("availableToWithdraw", 0))
             locked = float(coin.get("locked", 0))
@@ -279,7 +281,7 @@ def _parse_balance(result: dict, raw: dict) -> Balance:
     return Balance(assets=entries, raw=raw)
 
 
-def _parse_order(d: dict) -> Order:
+def _parse_order(d: dict[str, Any]) -> Order:
     return Order(
         id=d.get("orderId", ""),
         symbol=d.get("symbol", ""),

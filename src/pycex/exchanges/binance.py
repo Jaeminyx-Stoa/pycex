@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pycex.auth import binance_headers, binance_sign
 from pycex.base import BaseExchange
 from pycex.constants import BINANCE_BASE, BINANCE_BROKER_ID, BINANCE_TESTNET
@@ -46,7 +48,7 @@ class Binance(BaseExchange):
     def _auth_headers(self) -> dict[str, str]:
         return binance_headers(self._api_key)
 
-    def _signed_params(self, params: dict | None = None) -> dict:
+    def _signed_params(self, params: dict[str, Any] | None = None) -> dict[str, Any]:
         return binance_sign(self._secret, params or {})
 
     # ── Market Data ──
@@ -80,7 +82,7 @@ class Binance(BaseExchange):
     async def create_order(
         self, symbol: str, side: str, order_type: str, amount: float, price: float | None = None
     ) -> Order:
-        params: dict = {
+        params: dict[str, Any] = {
             "symbol": symbol,
             "side": side.upper(),
             "type": order_type.upper(),
@@ -104,7 +106,7 @@ class Binance(BaseExchange):
         return _parse_order(data)
 
     async def fetch_open_orders(self, symbol: str | None = None) -> list[Order]:
-        p: dict = {}
+        p: dict[str, Any] = {}
         if symbol:
             p["symbol"] = symbol
         params = self._signed_params(p)
@@ -134,7 +136,7 @@ class Binance(BaseExchange):
     def create_order_sync(
         self, symbol: str, side: str, order_type: str, amount: float, price: float | None = None
     ) -> Order:
-        params: dict = {
+        params: dict[str, Any] = {
             "symbol": symbol,
             "side": side.upper(),
             "type": order_type.upper(),
@@ -156,7 +158,7 @@ class Binance(BaseExchange):
 # ── Parsers ──
 
 
-def _parse_ticker(d: dict) -> Ticker:
+def _parse_ticker(d: dict[str, Any]) -> Ticker:
     return Ticker(
         symbol=d["symbol"],
         last=float(d["lastPrice"]),
@@ -171,7 +173,7 @@ def _parse_ticker(d: dict) -> Ticker:
     )
 
 
-def _parse_order_book(symbol: str, d: dict) -> OrderBook:
+def _parse_order_book(symbol: str, d: dict[str, Any]) -> OrderBook:
     return OrderBook(
         symbol=symbol,
         bids=[OrderBookEntry(price=float(b[0]), amount=float(b[1])) for b in d.get("bids", [])],
@@ -180,7 +182,7 @@ def _parse_order_book(symbol: str, d: dict) -> OrderBook:
     )
 
 
-def _parse_candle(k: list) -> Candle:
+def _parse_candle(k: list[Any]) -> Candle:
     return Candle(
         timestamp=int(k[0]),
         open=float(k[1]),
@@ -191,7 +193,7 @@ def _parse_candle(k: list) -> Candle:
     )
 
 
-def _parse_trade(symbol: str, t: dict) -> Trade:
+def _parse_trade(symbol: str, t: dict[str, Any]) -> Trade:
     return Trade(
         id=str(t["id"]),
         symbol=symbol,
@@ -202,7 +204,7 @@ def _parse_trade(symbol: str, t: dict) -> Trade:
     )
 
 
-def _parse_balance(d: dict) -> Balance:
+def _parse_balance(d: dict[str, Any]) -> Balance:
     entries = []
     for b in d.get("balances", []):
         free = float(b["free"])
@@ -212,7 +214,7 @@ def _parse_balance(d: dict) -> Balance:
     return Balance(assets=entries, raw=d)
 
 
-def _parse_order(d: dict) -> Order:
+def _parse_order(d: dict[str, Any]) -> Order:
     return Order(
         id=str(d.get("orderId", "")),
         symbol=d.get("symbol", ""),

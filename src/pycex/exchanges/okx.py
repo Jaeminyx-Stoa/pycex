@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from pycex.auth import okx_headers
 from pycex.base import BaseExchange
@@ -48,11 +49,12 @@ class OKX(BaseExchange):
             broker_headers["broker-id"] = OKX_BROKER_ID
         self._http = HTTPClient(OKX_BASE, timeout=timeout, rate=10.0, default_headers=broker_headers)
 
-    def _check(self, data: dict) -> list:
+    def _check(self, data: dict[str, Any]) -> list[Any]:
         code = data.get("code", "0")
         if code != "0":
             raise ExchangeError(data.get("msg", "Unknown error"), code=code, exchange="okx")
-        return data.get("data", [])
+        result: list[Any] = data.get("data", [])
+        return result
 
     def _auth_headers(self, method: str, path: str, body: str = "") -> dict[str, str]:
         headers = okx_headers(self._api_key, self._secret, self._passphrase, method, path, body)
@@ -97,7 +99,7 @@ class OKX(BaseExchange):
         self, symbol: str, side: str, order_type: str, amount: float, price: float | None = None
     ) -> Order:
         path = "/api/v5/trade/order"
-        body: dict = {
+        body: dict[str, Any] = {
             "instId": symbol,
             "tdMode": "cash",
             "side": side.lower(),
@@ -144,7 +146,7 @@ class OKX(BaseExchange):
         return Order(id=order_id, symbol=symbol, side="", type="", amount=0)
 
     async def fetch_open_orders(self, symbol: str | None = None) -> list[Order]:
-        params: dict = {}
+        params: dict[str, Any] = {}
         path = "/api/v5/trade/orders-pending"
         if symbol:
             params["instId"] = symbol
@@ -183,7 +185,7 @@ class OKX(BaseExchange):
         self, symbol: str, side: str, order_type: str, amount: float, price: float | None = None
     ) -> Order:
         path = "/api/v5/trade/order"
-        body: dict = {
+        body: dict[str, Any] = {
             "instId": symbol,
             "tdMode": "cash",
             "side": side.lower(),
@@ -221,7 +223,7 @@ class OKX(BaseExchange):
 # ── Parsers ──
 
 
-def _parse_ticker(d: dict) -> Ticker:
+def _parse_ticker(d: dict[str, Any]) -> Ticker:
     return Ticker(
         symbol=d.get("instId", ""),
         last=float(d.get("last", 0)),
@@ -236,7 +238,7 @@ def _parse_ticker(d: dict) -> Ticker:
     )
 
 
-def _parse_order_book(symbol: str, d: dict) -> OrderBook:
+def _parse_order_book(symbol: str, d: dict[str, Any]) -> OrderBook:
     return OrderBook(
         symbol=symbol,
         bids=[OrderBookEntry(price=float(b[0]), amount=float(b[1])) for b in d.get("bids", [])],
@@ -246,7 +248,7 @@ def _parse_order_book(symbol: str, d: dict) -> OrderBook:
     )
 
 
-def _parse_candle(k: list) -> Candle:
+def _parse_candle(k: list[Any]) -> Candle:
     return Candle(
         timestamp=int(k[0]),
         open=float(k[1]),
@@ -257,7 +259,7 @@ def _parse_candle(k: list) -> Candle:
     )
 
 
-def _parse_trade(t: dict) -> Trade:
+def _parse_trade(t: dict[str, Any]) -> Trade:
     return Trade(
         id=t.get("tradeId", ""),
         symbol=t.get("instId", ""),
@@ -268,7 +270,7 @@ def _parse_trade(t: dict) -> Trade:
     )
 
 
-def _parse_balance(result: list, raw: dict) -> Balance:
+def _parse_balance(result: list[Any], raw: dict[str, Any]) -> Balance:
     entries = []
     for account in result:
         for detail in account.get("details", []):
@@ -279,7 +281,7 @@ def _parse_balance(result: list, raw: dict) -> Balance:
     return Balance(assets=entries, raw=raw)
 
 
-def _parse_order(d: dict) -> Order:
+def _parse_order(d: dict[str, Any]) -> Order:
     return Order(
         id=d.get("ordId", ""),
         symbol=d.get("instId", ""),

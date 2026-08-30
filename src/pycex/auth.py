@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import time
+from typing import Any
 from urllib.parse import urlencode
 
 
@@ -20,7 +21,7 @@ def timestamp_ms() -> int:
 # ── Binance ──
 
 
-def binance_sign(secret: str, params: dict) -> dict:
+def binance_sign(secret: str, params: dict[str, Any]) -> dict[str, Any]:
     """Add signature to Binance request params."""
     params["timestamp"] = timestamp_ms()
     query = urlencode(params)

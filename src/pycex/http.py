@@ -55,7 +55,12 @@ class HTTPClient:
     """Async HTTP client for exchange API calls."""
 
     def __init__(
-        self, base_url: str, *, timeout: float = 30.0, rate: float = 10.0, default_headers: dict | None = None
+        self,
+        base_url: str,
+        *,
+        timeout: float = 30.0,
+        rate: float = 10.0,
+        default_headers: dict[str, str] | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._default_headers = default_headers or {}
@@ -63,7 +68,9 @@ class HTTPClient:
         self._sync_client = httpx.Client(base_url=self._base_url, timeout=timeout, headers=self._default_headers)
         self._limiter = RateLimiter(rate)
 
-    async def get(self, path: str, *, params: dict | None = None, headers: dict | None = None) -> dict[str, Any]:
+    async def get(
+        self, path: str, *, params: dict[str, Any] | None = None, headers: dict[str, str] | None = None
+    ) -> Any:
         await self._limiter.acquire()
         try:
             resp = await self._client.get(path, params=params, headers=headers)
@@ -72,8 +79,13 @@ class HTTPClient:
             raise NetworkError(str(e)) from e
 
     async def post(
-        self, path: str, *, data: dict | None = None, headers: dict | None = None, params: dict | None = None
-    ) -> dict[str, Any]:
+        self,
+        path: str,
+        *,
+        data: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
         await self._limiter.acquire()
         try:
             resp = await self._client.post(path, json=data, headers=headers, params=params)
@@ -81,7 +93,9 @@ class HTTPClient:
         except httpx.HTTPError as e:
             raise NetworkError(str(e)) from e
 
-    def sync_get(self, path: str, *, params: dict | None = None, headers: dict | None = None) -> dict[str, Any]:
+    def sync_get(
+        self, path: str, *, params: dict[str, Any] | None = None, headers: dict[str, str] | None = None
+    ) -> Any:
         self._limiter.wait()
         try:
             resp = self._sync_client.get(path, params=params, headers=headers)
@@ -90,8 +104,13 @@ class HTTPClient:
             raise NetworkError(str(e)) from e
 
     def sync_post(
-        self, path: str, *, data: dict | None = None, headers: dict | None = None, params: dict | None = None
-    ) -> dict[str, Any]:
+        self,
+        path: str,
+        *,
+        data: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
         self._limiter.wait()
         try:
             resp = self._sync_client.post(path, json=data, headers=headers, params=params)
@@ -99,13 +118,15 @@ class HTTPClient:
         except httpx.HTTPError as e:
             raise NetworkError(str(e)) from e
 
-    def _handle_response(self, resp: httpx.Response) -> dict[str, Any]:
+    def _handle_response(self, resp: httpx.Response) -> Any:
+        """Return the parsed JSON body. Shape (dict or list) depends on the endpoint."""
         if resp.status_code == 429:
             raise RateLimitError("Rate limit exceeded", exchange="")
-        data: dict[str, Any] = resp.json()
+        data: Any = resp.json()
         if resp.status_code >= 400:
-            msg = data.get("msg") or data.get("message") or str(data)
-            code = data.get("code") or data.get("ret_code") or resp.status_code
+            err: dict[str, Any] = data if isinstance(data, dict) else {}
+            msg = err.get("msg") or err.get("message") or str(data)
+            code = err.get("code") or err.get("ret_code") or resp.status_code
             raise ExchangeError(msg, code=code)
         return data
 

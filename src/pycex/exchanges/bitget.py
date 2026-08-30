@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 from urllib.parse import urlencode
 
 from pycex.auth import bitget_headers
@@ -57,7 +58,7 @@ class Bitget(BaseExchange):
             broker_headers["X-CHANNEL-API-CODE"] = BITGET_BROKER_ID
         self._http = HTTPClient(BITGET_BASE, timeout=timeout, rate=10.0, default_headers=broker_headers)
 
-    def _check(self, data: dict) -> list:
+    def _check(self, data: dict[str, Any]) -> list[Any]:
         # Bitget wraps success as code "00000"; auth/API errors arrive as HTTP 200 + non-zero code.
         code = data.get("code", "00000")
         if code != "00000":
@@ -72,7 +73,7 @@ class Bitget(BaseExchange):
         return bitget_headers(self._api_key, self._secret, self._passphrase, "POST", path, body, demo=self._demo)
 
     @staticmethod
-    def _path(path: str, params: dict | None) -> str:
+    def _path(path: str, params: dict[str, Any] | None) -> str:
         # Sign over the exact query string we send → build it into the path and pass params=None.
         return f"{path}?{urlencode(params)}" if params else path
 
@@ -83,9 +84,7 @@ class Bitget(BaseExchange):
         return _parse_ticker(self._check(data)[0])
 
     async def fetch_order_book(self, symbol: str, *, limit: int = 20) -> OrderBook:
-        data = await self._http.get(
-            "/api/v2/spot/market/orderbook", params={"symbol": symbol, "limit": limit}
-        )
+        data = await self._http.get("/api/v2/spot/market/orderbook", params={"symbol": symbol, "limit": limit})
         return _parse_order_book(symbol, self._check(data)[0])
 
     async def fetch_candles(self, symbol: str, timeframe: str = "1h", *, limit: int = 100) -> list[Candle]:
@@ -110,7 +109,7 @@ class Bitget(BaseExchange):
         self, symbol: str, side: str, order_type: str, amount: float, price: float | None = None
     ) -> Order:
         path = "/api/v2/spot/trade/place-order"
-        body: dict = {
+        body: dict[str, Any] = {
             "symbol": symbol,
             "side": side.lower(),
             "orderType": "limit" if order_type.lower() == "limit" else "market",
@@ -178,7 +177,7 @@ class Bitget(BaseExchange):
         self, symbol: str, side: str, order_type: str, amount: float, price: float | None = None
     ) -> Order:
         path = "/api/v2/spot/trade/place-order"
-        body: dict = {
+        body: dict[str, Any] = {
             "symbol": symbol,
             "side": side.lower(),
             "orderType": "limit" if order_type.lower() == "limit" else "market",
@@ -215,7 +214,7 @@ class Bitget(BaseExchange):
 # ── Parsers ──
 
 
-def _parse_ticker(d: dict) -> Ticker:
+def _parse_ticker(d: dict[str, Any]) -> Ticker:
     return Ticker(
         symbol=d.get("symbol", ""),
         last=float(d.get("lastPr", 0) or 0),
@@ -230,7 +229,7 @@ def _parse_ticker(d: dict) -> Ticker:
     )
 
 
-def _parse_order_book(symbol: str, d: dict) -> OrderBook:
+def _parse_order_book(symbol: str, d: dict[str, Any]) -> OrderBook:
     return OrderBook(
         symbol=symbol,
         bids=[OrderBookEntry(price=float(b[0]), amount=float(b[1])) for b in d.get("bids", [])],
@@ -240,7 +239,7 @@ def _parse_order_book(symbol: str, d: dict) -> OrderBook:
     )
 
 
-def _parse_candle(k: list) -> Candle:
+def _parse_candle(k: list[Any]) -> Candle:
     return Candle(
         timestamp=int(k[0]),
         open=float(k[1]),
@@ -251,7 +250,7 @@ def _parse_candle(k: list) -> Candle:
     )
 
 
-def _parse_trade(t: dict) -> Trade:
+def _parse_trade(t: dict[str, Any]) -> Trade:
     return Trade(
         id=str(t.get("tradeId", "")),
         symbol=t.get("symbol", ""),
@@ -262,7 +261,7 @@ def _parse_trade(t: dict) -> Trade:
     )
 
 
-def _parse_balance(result: list, raw: dict) -> Balance:
+def _parse_balance(result: list[Any], raw: dict[str, Any]) -> Balance:
     entries = []
     for coin in result:
         free = float(coin.get("available", 0) or 0)
@@ -272,7 +271,7 @@ def _parse_balance(result: list, raw: dict) -> Balance:
     return Balance(assets=entries, raw=raw)
 
 
-def _parse_order(d: dict) -> Order:
+def _parse_order(d: dict[str, Any]) -> Order:
     price = float(d.get("price", 0) or 0)
     return Order(
         id=str(d.get("orderId", "")),
