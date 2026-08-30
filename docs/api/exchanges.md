@@ -294,6 +294,140 @@ with OKX(api_key="KEY", secret="SECRET", passphrase="PASS", market_type="linear"
   both methods check `sCode` after the top-level check and raise through the
   same error mapping.
 
+## Bitget
+
+Bitget uses the V2 API. Spot and USDT-margined linear perpetual futures
+("mix", `market_type="linear"`) share the same host (`api.bitget.com`) but
+different path prefixes (`/api/v2/spot/...` vs `/api/v2/mix/...`); linear
+requests additionally require a `productType` param (`"USDT-FUTURES"`, or
+`"SUSDT-FUTURES"` in sandbox mode). Native symbols have no separator
+(`BTCUSDT`), for both market types; callers always pass the canonical
+`BTC/USDT` (spot) or `BTC/USDT:USDT` (linear) form.
+
+```python
+from pycex import Bitget
+
+# Public data
+with Bitget() as ex:
+    ticker = ex.fetch_ticker_sync("BTC/USDT")
+    ob = ex.fetch_order_book_sync("BTC/USDT", limit=10)
+    print(f"BTC: ${ticker.last:,.2f}")
+
+# With authentication (Bitget requires passphrase)
+with Bitget(api_key="KEY", secret="SECRET", passphrase="PASS") as ex:
+    balance = ex.fetch_balance_sync()
+    order = ex.create_order_sync("BTC/USDT", "buy", "limit", 0.001, 50000.0)
+```
+
+### Bitget Constructor
+
+```python
+Bitget(
+    api_key: str = "",
+    secret: str = "",
+    passphrase: str = "",
+    *,
+    sandbox: bool = False,
+    market_type: MarketType = "spot",
+    demo: bool | None = None,  # deprecated, use sandbox=
+    timeout: float = 30.0,
+)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `api_key` | `str` | `""` | Bitget API key |
+| `secret` | `str` | `""` | Bitget API secret |
+| `passphrase` | `str` | `""` | Bitget API passphrase |
+| `sandbox` | `bool` | `False` | Use demo trading mode |
+| `market_type` | `"spot" \| "linear"` | `"spot"` | Product type (`"linear"` = USDT-margined perpetual futures, `productType="USDT-FUTURES"`) |
+| `demo` | `bool \| None` | `None` | Deprecated alias for `sandbox` |
+| `timeout` | `float` | `30.0` | HTTP request timeout in seconds |
+
+### Bitget Demo Trading — two independent mechanisms
+
+Unlike most exchanges, Bitget's sandbox/demo mode differs by `market_type`
+because Bitget itself exposes two unrelated demo mechanisms and this adapter
+picks a different one per market type (confirmed via ccxt's own request
+builder — Bitget's `api-doc` site is a client-rendered SPA that would not
+serve endpoint reference pages to automated fetching in this pass):
+
+- **Spot** (`sandbox=True`, `market_type="spot"`): header-based demo trading
+  — every signed request gets an extra `paptrading: 1` header, same host,
+  same symbols, requires a demo API key issued in Bitget's demo environment.
+- **Linear** (`sandbox=True`, `market_type="linear"`): a dedicated simulated
+  productType family instead — `productType` becomes `"SUSDT-FUTURES"` and
+  native symbols get an `S` prefix on **both** base and quote
+  (`BTC/USDT:USDT` -> `SBTCSUSDT`, not `BTCUSDT`). The `paptrading` header is
+  **not** also added in this case — the `S*` productType is itself Bitget's
+  demo signal, and combining both would be redundant/conflicting.
+
+```python
+from pycex import Bitget
+
+# Spot demo: header flag, same symbols
+with Bitget(api_key="KEY", secret="SECRET", passphrase="PASS", sandbox=True) as ex:
+    balance = ex.fetch_balance_sync()
+
+# Linear demo: SUSDT-FUTURES productType, S-prefixed native symbols
+with Bitget(api_key="KEY", secret="SECRET", passphrase="PASS", market_type="linear", sandbox=True) as ex:
+    print(ex.to_native("BTC/USDT:USDT"))  # "SBTCSUSDT"
+```
+
+### Bitget USDT-Margined Linear Perpetual Futures (`market_type="linear"`)
+
+```python
+from pycex import Bitget
+
+with Bitget(api_key="KEY", secret="SECRET", passphrase="PASS", market_type="linear") as ex:
+    markets = ex.fetch_markets_sync()  # populates the symbol cache used by from_native
+    funding = ex.fetch_funding_rate_sync("BTC/USDT:USDT")
+    print(f"funding rate: {funding.rate:.6f} (every {funding.interval_hours}h)")
+
+    positions = ex.fetch_positions_sync()
+    for p in positions:
+        print(f"{p.symbol}: {p.side} {p.amount} @ {p.entry_price}, uPnL={p.unrealized_pnl}")
+
+    order = ex.create_order_sync("BTC/USDT:USDT", "buy", "market", 0.001)
+    trades = ex.fetch_my_trades_sync("BTC/USDT:USDT")
+```
+
+- `fetch_positions`/`fetch_funding_rate` raise `NotSupportedError` on a
+  `"spot"` instance (the shared `BaseExchange` default) — they only work with
+  `market_type="linear"`.
+- `create_order` always sends `marginMode="crossed"` and never sends
+  `tradeSide`, i.e. it assumes the account is in **one-way mode** (Bitget's
+  default). A **hedge-mode** account requires `tradeSide="Open"`/`"Close"` on
+  every order; without it Bitget rejects the order, surfaced as whatever
+  `ExchangeError` it returns.
+- **Inverse (coin-margined) perpetuals are out of scope** — only
+  USDT-settled linear (`settle == quote`) is supported. `to_native` raises
+  `SymbolNotFoundError` for a canonical symbol like `BTC/USD:BTC`.
+- `fetch_positions` filters out flat rows (`total == 0`); `liquidationPrice`
+  of `"0"`/empty maps to `None`, not `0.0`, same treatment as OKX/Binance.
+- `fetch_my_trades`/`fetch_open_orders` unwrap a nested key
+  (`data.fillList`/`data.entrustedList`) rather than a bare list under
+  `data` — confirmed against ccxt's parser, since Bitget's own `api-doc`
+  pages could not be reached by automated fetching in this pass. Both
+  require a `symbol` (raises `ValueError` without one).
+- `fetch_candles`/`_fetch_candles_page` clamp `limit` to 200 (the tighter of
+  the "recent" `market/candles` endpoint's 1000-bar cap and
+  `history-candles`' 200-bar cap — `Bitget.candle_page_limit = 200`) and
+  retry against `GET /api/v2/mix/market/history-candles` with the same
+  params whenever `market/candles` returns an empty `data` array (mirrors
+  the OKX adapter's fallback; not independently confirmed live for Bitget in
+  this pass, but harmless when the recent endpoint already has data). Daily
+  bars use granularity `"1Dutc"` (UTC-aligned), not `"1D"`/`"1day"`.
+- `create_order`/`cancel_order` sign and send the **identical** JSON string
+  (`HTTPClient.post_raw`, not `post`) for both spot and linear — same
+  signature-body trap as OKX: Bitget's `ACCESS-SIGN` covers the literal
+  request body bytes, and httpx's own `json=` encoding re-serializes a dict
+  with different separators than `json.dumps`, which would silently break
+  every signed order/cancel/balance/position/fills request. Unlike OKX,
+  Bitget's place-order/cancel-order responses have no secondary per-item
+  rejection field — the top-level `code` (already `"00000"`-checked) is the
+  only rejection signal for these two endpoints.
+
 ## Upbit
 
 Upbit is a Korean-won (KRW) spot exchange — no sandbox/demo environment and
