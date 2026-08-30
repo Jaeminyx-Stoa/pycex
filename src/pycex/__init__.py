@@ -5,6 +5,7 @@ from pycex.constants import (
     BINANCE_BASE,
     BINANCE_TESTNET,
     BITGET_BASE,
+    BITHUMB_BASE,
     BUY,
     BYBIT_BASE,
     BYBIT_TESTNET,
@@ -26,19 +27,21 @@ from pycex.exceptions import (
     RateLimitError,
     SymbolNotFoundError,
 )
-from pycex.exchanges import OKX, Binance, Bitget, Bybit, Upbit
+from pycex.exchanges import OKX, Binance, Bitget, Bithumb, Bybit, Upbit
 
 __version__ = "0.1.0"
 __all__ = [
     "BaseExchange",
     "Binance",
     "Bitget",
+    "Bithumb",
     "Bybit",
     "OKX",
     "Upbit",
     "BINANCE_BASE",
     "BINANCE_TESTNET",
     "BITGET_BASE",
+    "BITHUMB_BASE",
     "BYBIT_BASE",
     "BYBIT_TESTNET",
     "OKX_BASE",

@@ -2,8 +2,9 @@
 
 from pycex.exchanges.binance import Binance
 from pycex.exchanges.bitget import Bitget
+from pycex.exchanges.bithumb import Bithumb
 from pycex.exchanges.bybit import Bybit
 from pycex.exchanges.okx import OKX
 from pycex.exchanges.upbit import Upbit
 
-__all__ = ["Binance", "Bitget", "Bybit", "OKX", "Upbit"]
+__all__ = ["Binance", "Bitget", "Bithumb", "Bybit", "OKX", "Upbit"]

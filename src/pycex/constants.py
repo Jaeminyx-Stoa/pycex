@@ -20,6 +20,9 @@ BITGET_BASE = "https://api.bitget.com"  # same host for live and demo, demo via 
 # ── Upbit ──
 UPBIT_BASE = "https://api.upbit.com"  # no sandbox/demo environment
 
+# ── Bithumb ──
+BITHUMB_BASE = "https://api.bithumb.com"  # no sandbox/demo environment; v1/v2 REST paths coexist
+
 # ── Sides ──
 BUY = "buy"
 SELL = "sell"

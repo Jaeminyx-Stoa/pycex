@@ -142,3 +142,22 @@ def upbit_headers(api_key: str, secret: str, params: dict[str, Any] | None = Non
         payload["query_hash"] = hashlib.sha512(urlencode(params, doseq=True).encode()).hexdigest()
         payload["query_hash_alg"] = "SHA512"
     return {"Authorization": f"Bearer {jwt_hs256(secret, payload)}"}
+
+
+# ── Bithumb ──
+
+
+def bithumb_headers(api_key: str, secret: str, params: dict[str, Any] | None = None) -> dict[str, str]:
+    """Build Bithumb JWT authentication headers.
+
+    Same shape as :func:`upbit_headers` (JWT HS256, ``query_hash``/``query_hash_alg``
+    when ``params`` is given), but Bithumb requires an explicit ``timestamp``
+    (Unix **milliseconds**) field in every payload regardless of whether the
+    request carries params — this is the one field Upbit's payload omits. See
+    https://apidocs.bithumb.com/docs/인증-토큰-생성하기.
+    """
+    payload: dict[str, Any] = {"access_key": api_key, "nonce": str(uuid.uuid4()), "timestamp": timestamp_ms()}
+    if params:
+        payload["query_hash"] = hashlib.sha512(urlencode(params, doseq=True).encode()).hexdigest()
+        payload["query_hash_alg"] = "SHA512"
+    return {"Authorization": f"Bearer {jwt_hs256(secret, payload)}"}

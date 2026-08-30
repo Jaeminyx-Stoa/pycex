@@ -245,6 +245,81 @@ Upbit(
 - **Daily candles reset at 00:00 UTC (09:00 KST)**, not KST midnight —
   different from Bithumb/Korbit, which reset at KST midnight.
 
+## Bithumb
+
+Bithumb is a Korean-won (KRW) spot exchange — no sandbox/demo environment and
+spot only, same as Upbit. Its public market-data surface (symbols, candles,
+ticker, order book, public trades) is identical in path and shape to Upbit's,
+so both adapters share that code (`KrwV1Mixin`). Private endpoints, however,
+are a **v1/v2 mix**: balance uses the same `/v1/accounts` as Upbit, but order
+creation/cancel/pending/history use newer `/v2/...` paths with a leaner
+response shape, while individual-order lookup stays on the legacy `/v1/order`.
+Auth is a JWT (HS256) like Upbit's, but the payload requires an explicit
+`timestamp` (ms) field that Upbit's omits.
+
+```python
+from pycex import Bithumb
+
+# Public data (no auth)
+with Bithumb() as ex:
+    ticker = ex.fetch_ticker_sync("BTC/KRW")
+    ob = ex.fetch_order_book_sync("BTC/KRW", limit=10)
+    print(f"BTC: ₩{ticker.last:,.0f}")
+
+# With authentication
+with Bithumb(api_key="KEY", secret="SECRET") as ex:
+    balance = ex.fetch_balance_sync()
+    order = ex.create_order_sync("BTC/KRW", "buy", "limit", 0.001, 100_000_000.0)
+    canceled = ex.cancel_order_sync(order.id, "BTC/KRW")
+```
+
+### Bithumb Constructor
+
+```python
+Bithumb(
+    api_key: str = "",
+    secret: str = "",
+    *,
+    sandbox: bool = False,      # always False — raises NotSupportedError if True
+    market_type: MarketType = "spot",  # must be "spot" — raises NotSupportedError otherwise
+    timeout: float = 30.0,
+)
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `api_key` | `str` | `""` | Bithumb access key |
+| `secret` | `str` | `""` | Bithumb secret key |
+| `sandbox` | `bool` | `False` | Not supported — Bithumb has no demo environment |
+| `market_type` | `"spot" \| "linear"` | `"spot"` | Only `"spot"` is supported |
+| `timeout` | `float` | `30.0` | HTTP request timeout in seconds |
+
+### Bithumb Notes
+
+- **Private endpoints mix v1 and v2 paths**: balance (`GET /v1/accounts`) and
+  individual-order lookup (`GET /v1/order?uuid=`) are v1 and return the full
+  order/account shape; order creation (`POST /v2/orders`), cancel
+  (`DELETE /v2/order`), open orders (`GET /v2/orders/pending`), and completed
+  orders (`GET /v2/orders/history`) are v2. The v2 field names (`order_id`,
+  `order_type`) are normalized to their v1 equivalents (`uuid`, `ord_type`)
+  before parsing, so all endpoints share one `Order` parser.
+- **Market orders**: same convention as Upbit — a market *buy* uses
+  `order_type="price"` with `amount` as the **KRW total to spend**; a market
+  *sell* uses `order_type="market"` with `amount` as the base-asset volume.
+- **`create_order`/`cancel_order` return partial data**: Bithumb's v2
+  create/cancel responses don't echo back price/volume/state the way the v1
+  full-order shape does, so the returned `Order`'s `amount`/`price`/`status`
+  reflect only what the API actually returned (`cancel_order` forces
+  `status="cancel"` since that's the one fact the call itself guarantees) —
+  see `raw` for the full response.
+- **`fetch_my_trades` makes `1 + N` requests**: `/v2/orders/history` has no
+  `trades` array (only `trades_count`), so this fetches up to `limit`
+  (default 20, capped at 50) completed orders, then calls
+  `GET /v1/order?uuid=` once per order to flatten its `trades[]` array.
+- 🚨 **Daily candles reset at 00:00 KST (15:00 UTC the previous day)** —
+  different from Upbit, which resets at 00:00 UTC, despite both exchanges
+  returning the same `candle_date_time_utc` field shape.
+
 ## Unified Interface (BaseExchange)
 
 All exchanges implement these methods:
