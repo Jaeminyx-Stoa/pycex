@@ -25,6 +25,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from pycex.constants import TIMEFRAME_MS
 from pycex.exceptions import (
     AuthenticationError,
     ExchangeError,
@@ -49,7 +50,6 @@ if TYPE_CHECKING:
 # Canonical timeframe -> candle path suffix (`/v1/candles/{suffix}`), identical
 # on both exchanges.
 _TF = {"1m": "minutes/1", "5m": "minutes/5", "15m": "minutes/15", "1h": "minutes/60", "4h": "minutes/240", "1d": "days"}
-_TF_MS = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
 
 
 def _iso_utc(ms: int) -> str:
@@ -158,7 +158,7 @@ class KrwV1Mixin:
             # `limit` bars after `since`. BaseExchange.fetch_candles drives the
             # multi-page walk with `until` (candle_paging = "backward"); this
             # branch only fires for a direct single-page call.
-            params["to"] = self._format_to(since + limit * _TF_MS[timeframe])
+            params["to"] = self._format_to(since + limit * TIMEFRAME_MS[timeframe])
         data = self._check(await self._http.get(f"/v1/candles/{_TF[timeframe]}", params=params))
         return sorted((_parse_candle(c) for c in data), key=lambda c: c.timestamp)
 

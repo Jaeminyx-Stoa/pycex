@@ -133,6 +133,8 @@ _PATHS: dict[str, dict[str, str]] = {
 
 class Binance(BaseExchange):
     name = "binance"
+    # `startTime` serves the oldest `limit` bars from it (live probe 2026-08-30).
+    candle_paging = "forward"
 
     def __init__(
         self,

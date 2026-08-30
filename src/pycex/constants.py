@@ -28,6 +28,18 @@ BITHUMB_BASE = "https://api.bithumb.com"  # no sandbox/demo environment; v1/v2 R
 # ── Korbit ──
 KORBIT_BASE = "https://api.korbit.co.kr"  # no sandbox/demo environment
 
+# ── Timeframes ──
+# Canonical timeframe -> bar duration in milliseconds. Single source for every
+# adapter and for BaseExchange's backward-paging anchor.
+TIMEFRAME_MS: dict[str, int] = {
+    "1m": 60_000,
+    "5m": 300_000,
+    "15m": 900_000,
+    "1h": 3_600_000,
+    "4h": 14_400_000,
+    "1d": 86_400_000,
+}
+
 # ── Sides ──
 BUY = "buy"
 SELL = "sell"

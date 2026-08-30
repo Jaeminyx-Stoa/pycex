@@ -6,8 +6,9 @@ import asyncio
 import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
+from pycex.constants import TIMEFRAME_MS
 from pycex.exceptions import NotSupportedError
 
 if TYPE_CHECKING:
@@ -58,6 +59,19 @@ class BaseExchange(ABC):
     market_type: MarketType = "spot"
     sandbox: bool = False
     candle_page_limit: int = 200
+    #: Which end of the range this venue's candle endpoint anchors a page on.
+    #:
+    #: ``"forward"`` — the page hook honours ``since`` and serves the **oldest**
+    #: bars from it (Binance ``startTime``, Bybit ``start``, Bitget mix
+    #: ``startTime``); ``fetch_candles`` walks the cursor up.
+    #:
+    #: ``"backward"`` — the endpoint anchors at ``until``/"now" and serves the
+    #: **newest** bars at or before it, so a ``since`` cursor makes no progress
+    #: (Upbit/Bithumb ``to``, Korbit ``end``, OKX ``after``, Bitget spot
+    #: ``endTime``); ``fetch_candles`` walks the cursor down instead, passing it
+    #: as ``until``. Every value is set from a live probe — see
+    #: ``tests/live/test_smoke.py::test_candle_pagination``.
+    candle_paging: Literal["forward", "backward"] = "forward"
     supported_timeframes: frozenset[str] = frozenset({"1m", "5m", "15m", "1h", "4h", "1d"})
     _http: HTTPClient
 
@@ -140,35 +154,107 @@ class BaseExchange(ABC):
         until: int | None = None,
         limit: int | None = None,
     ) -> list[Candle]:
-        """Fetch OHLCV candles, paginating over ``_fetch_candles_page`` when ``since``/``until`` are given."""
+        """Fetch OHLCV candles, paginating over ``_fetch_candles_page`` when ``since``/``until`` are given.
+
+        The page walk is driven by :attr:`candle_paging` — see that attribute and the
+        two ``_walk_*`` helpers. Whichever direction the venue pages in, the result is
+        deduplicated, sorted ascending, cut at ``until`` and sliced to ``limit``.
+        """
         if timeframe not in self.supported_timeframes:
             raise NotSupportedError(f"{self.name} does not support timeframe {timeframe}")
         native = self.to_native(symbol)
         if since is None:
             return await self._fetch_candles_page(native, timeframe, since=None, until=until, limit=limit or 100)
         out: dict[int, Candle] = {}
+        if self.candle_paging == "forward":
+            await self._walk_forward(out, native, timeframe, since=since, until=until, limit=limit)
+        else:
+            await self._walk_backward(out, native, timeframe, since=since, until=until, limit=limit)
+        result = [out[k] for k in sorted(out)]
+        return result[:limit] if limit else result
+
+    def _keep(self, page: list[Candle], out: dict[int, Candle], since: int, until: int | None) -> list[Candle]:
+        """The bars of ``page`` that are in range and not already collected."""
+        return [
+            c
+            for c in page
+            if c.timestamp >= since and (until is None or c.timestamp <= until) and c.timestamp not in out
+        ]
+
+    async def _walk_forward(
+        self,
+        out: dict[int, Candle],
+        native: str,
+        timeframe: str,
+        *,
+        since: int,
+        until: int | None,
+        limit: int | None,
+    ) -> None:
+        """Page a ``candle_paging = "forward"`` venue: the cursor is ``since`` and walks
+        *up*, to one millisecond past the newest bar of the page just served."""
         cursor = since
         while True:
             page = await self._fetch_candles_page(
                 native, timeframe, since=cursor, until=until, limit=self.candle_page_limit
             )
-            page = [c for c in page if c.timestamp >= since and (until is None or c.timestamp <= until)]
             if not page:
-                break
-            new = [c for c in page if c.timestamp not in out]
+                return
+            new = self._keep(page, out, since, until)
+            if not new:
+                # No timestamp we did not already hold: end of data, or the venue
+                # re-served a page we already have. Either way the walk is over.
+                return
             for c in new:
                 out[c.timestamp] = c
-            if (
-                not new
-                or (until is not None and max(c.timestamp for c in page) >= until)
-                or len(page) < self.candle_page_limit
-            ):
-                break
-            cursor = max(c.timestamp for c in page) + 1
+            newest = max(c.timestamp for c in page)
+            if until is not None and newest >= until:
+                return
             if limit is not None and len(out) >= limit:
-                break
-        result = [out[k] for k in sorted(out)]
-        return result[:limit] if limit else result
+                return
+            cursor = newest + 1
+
+    async def _walk_backward(
+        self,
+        out: dict[int, Candle],
+        native: str,
+        timeframe: str,
+        *,
+        since: int,
+        until: int | None,
+        limit: int | None,
+    ) -> None:
+        """Page a ``candle_paging = "backward"`` venue: the cursor is ``until`` and walks
+        *down* from the upper bound (or the venue's "now") to ``since``.
+
+        With a ``limit`` the upper bound is pulled in to ``since + limit * timeframe``:
+        the caller asked for the ``limit`` **oldest** bars from ``since``, so anchoring
+        at "now" would page the whole span backwards only to throw all but the tail
+        away.
+        """
+        upper = until
+        span = TIMEFRAME_MS.get(timeframe)
+        if limit is not None and span is not None:
+            bound = since + limit * span
+            upper = bound if until is None else min(until, bound)
+        cursor = upper
+        while True:
+            page = await self._fetch_candles_page(
+                native, timeframe, since=None, until=cursor, limit=self.candle_page_limit
+            )
+            if not page:
+                return
+            new = self._keep(page, out, since, until)
+            for c in new:
+                out[c.timestamp] = c
+            oldest = min(c.timestamp for c in page)
+            if oldest <= since:
+                return  # walked past the lower bound
+            if not new:
+                # Nothing new: the venue ignored the cursor and re-served a page we
+                # already hold. Stop rather than request it forever.
+                return
+            cursor = oldest - 1
 
     @abstractmethod
     async def fetch_trades(self, symbol: str, *, limit: int = 100) -> list[Trade]: ...

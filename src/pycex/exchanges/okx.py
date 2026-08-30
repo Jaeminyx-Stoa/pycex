@@ -120,6 +120,10 @@ class OKX(BaseExchange):
     # allows up to 300, but pagination must stay within the tighter of the two
     # since either endpoint may serve a given page — see _fetch_candles_page).
     candle_page_limit = 100
+    # `before=since` asks for records NEWER than `since` and still serves the newest
+    # `limit` of them (live probe 2026-08-30: since = now-400d -> 2026-05-23..2026-08-30).
+    # `after` (the upper bound) is the cursor that actually walks the history.
+    candle_paging = "backward"
 
     def __init__(
         self,

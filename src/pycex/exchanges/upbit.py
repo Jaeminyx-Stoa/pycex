@@ -44,6 +44,10 @@ class Upbit(KrwV1Mixin, BaseExchange):
 
     name = "upbit"
     candle_page_limit = 200
+    # `to` is the only candle cursor this API has: a page is always the newest
+    # `count` bars at or before it. Live probe 2026-08-30, 1d bars, since = now-400d,
+    # limit 200 -> the API served the newest slice, not the oldest.
+    candle_paging = "backward"
     _auth_error_names = _AUTH_NAMES
     _rate_limit_error_names = _RATE_LIMIT_NAMES
     supported_timeframes = frozenset({"1m", "5m", "15m", "1h", "4h", "1d"})

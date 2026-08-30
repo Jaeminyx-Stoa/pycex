@@ -62,6 +62,10 @@ class Korbit(BaseExchange):
 
     name = "korbit"
     candle_page_limit = 200
+    # `start` is honoured as a floor but the page is the newest `limit` bars inside
+    # [start, end], not the oldest. Live probe 2026-08-30, 1d bars, since = now-400d,
+    # limit 200 -> 2026-02-11..2026-08-29 (the newest slice). `end` is the real cursor.
+    candle_paging = "backward"
     supported_timeframes = frozenset({"1m", "5m", "15m", "1h", "4h", "1d"})
 
     def __init__(

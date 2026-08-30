@@ -82,6 +82,12 @@ _TIMEFRAME_MAP = {
 
 class Bybit(BaseExchange):
     name = "bybit"
+    # 🚨 Direction depends on whether `end` is sent. With `start` alone the page is the
+    # OLDEST `limit` bars from it; with `start`+`end` (what a range walk sends) Bybit
+    # serves the NEWEST `limit` bars inside the window instead, so a `since` cursor
+    # never advances past the first page (live probe 2026-08-30: 1h bars over 15 days
+    # -> 200 of 360, forward). `end` is the cursor that actually walks the history.
+    candle_paging = "backward"
 
     def __init__(
         self,

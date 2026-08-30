@@ -77,6 +77,8 @@ class Bithumb(KrwV1Mixin, BaseExchange):
 
     name = "bithumb"
     candle_page_limit = 200
+    # Same `to`-only cursor as Upbit (and the same naive-KST caveat — see `_format_to`).
+    candle_paging = "backward"
     _auth_error_names = _AUTH_NAMES
     supported_timeframes = frozenset({"1m", "5m", "15m", "1h", "4h", "1d"})
 

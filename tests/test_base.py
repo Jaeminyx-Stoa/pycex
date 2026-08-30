@@ -94,3 +94,77 @@ async def test_sync_wrapper_inside_loop_raises() -> None:
 async def test_positions_default_not_supported() -> None:
     with pytest.raises(NotSupportedError):
         await Fake().fetch_positions()
+
+
+class BackwardFake(Fake):
+    """Models a venue that only pages **backward**: it ignores ``since`` entirely and
+    serves the newest ``limit`` bars at or before ``until`` (``until=None`` = now),
+    newest-first — the shape of Upbit/Bithumb (``to``), Korbit (``end``), OKX
+    (``after``) and Bitget spot (``endTime``).
+
+    The old forward-only loop re-served the same newest page on every iteration
+    here, found no new timestamps and broke out after one page — silently
+    truncating every multi-page range on five of the seven adapters.
+    """
+
+    NOW = 10 * 60_000
+
+    async def _fetch_candles_page(self, native, timeframe, *, since, until, limit):
+        self.calls.append((since, until, limit))
+        end = self.NOW if until is None else until
+        bars = [t for t in range(0, self.NOW + 60_000, 60_000) if t <= end]
+        newest_first = sorted(bars, reverse=True)[:limit]
+        return [Candle(timestamp=t, open=1, high=1, low=1, close=1, volume=1) for t in newest_first]
+
+
+class ShortPageFake(Fake):
+    """Models Bybit: the venue answers a ``since`` cursor with a page whose oldest bar
+    sits just *before* the cursor, so after the base loop's range filter the page is
+    always one bar shorter than ``candle_page_limit``. The old
+    ``len(page) < candle_page_limit`` early break read that as "last page" and
+    truncated the result at the first page (live: 199 of 500 bars on Bybit)."""
+
+    async def _fetch_candles_page(self, native, timeframe, *, since, until, limit):
+        self.calls.append((since, until, limit))
+        start = -(-(since or 0) // 60_000) * 60_000 - 60_000
+        return [Candle(timestamp=start + i * 60_000, open=1, high=1, low=1, close=1, volume=1) for i in range(limit)]
+
+
+def test_candle_paging_defaults_to_forward() -> None:
+    assert BaseExchange.candle_paging == "forward"
+    assert Fake().candle_paging == "forward"
+
+
+async def test_backward_paging_walks_a_multi_page_span() -> None:
+    ex = BackwardFake()
+    ex.candle_paging = "backward"
+    out = await ex.fetch_candles("BTC/USDT", "1m", since=0, until=4 * 60_000)
+    assert [c.timestamp for c in out] == [0, 60_000, 120_000, 180_000, 240_000]
+    assert len(ex.calls) == 3  # 2 + 2 + 1 bars over a page limit of 2
+    # cursor walks down via `until`: page1 = [240k, 180k] -> 179_999, page2 = [120k, 60k] -> 59_999
+    assert [c[1] for c in ex.calls] == [4 * 60_000, 3 * 60_000 - 1, 60_000 - 1]
+    assert all(c[0] is None for c in ex.calls)  # `since` is never the cursor on a backward venue
+
+
+async def test_backward_paging_without_until_anchors_at_now() -> None:
+    ex = BackwardFake()
+    ex.candle_paging = "backward"
+    out = await ex.fetch_candles("BTC/USDT", "1m", since=7 * 60_000)
+    assert [c.timestamp for c in out] == [7 * 60_000, 8 * 60_000, 9 * 60_000, 10 * 60_000]
+    assert ex.calls[0][1] is None  # first page anchors at the venue's "now"
+
+
+async def test_backward_paging_with_limit_bounds_the_anchor() -> None:
+    """A `limit` must not make the walk start at "now" and page all the way down —
+    the anchor is bounded to `since + limit * timeframe`."""
+    ex = BackwardFake()
+    ex.candle_paging = "backward"
+    out = await ex.fetch_candles("BTC/USDT", "1m", since=0, limit=3)
+    assert [c.timestamp for c in out] == [0, 60_000, 120_000]
+    assert ex.calls[0][1] == 3 * 60_000
+
+
+async def test_forward_paging_survives_a_short_in_range_page() -> None:
+    ex = ShortPageFake()
+    out = await ex.fetch_candles("BTC/USDT", "1m", since=0, until=4 * 60_000)
+    assert [c.timestamp for c in out] == [0, 60_000, 120_000, 180_000, 240_000]
