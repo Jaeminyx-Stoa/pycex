@@ -145,6 +145,10 @@ class OKX(BaseExchange):
         self.market_type = market_type
         self._td_mode = td_mode
         self._inst_type = "SWAP" if market_type == "linear" else "SPOT"
+        #: Measured OKX account level (``acctLv``). ``None`` until
+        #: :meth:`fetch_account_config` has run — never assumed. See
+        #: :meth:`_spot_td_mode`.
+        self._acct_level: str | None = None
         self.sandbox = self._resolve_sandbox(sandbox, None, demo)
         self._markets: dict[str, Market] = {}
         broker_headers: dict[str, str] = {}
@@ -153,6 +157,16 @@ class OKX(BaseExchange):
         self._http = HTTPClient(
             OKX_BASE, timeout=timeout, rate=10.0, default_headers=broker_headers, error_mapper=_error_mapper
         )
+
+    @property
+    def account_level(self) -> str | None:
+        """The measured OKX account level (``acctLv``), or ``None`` if not measured yet.
+
+        Read-only on purpose: the account level is a fact about the account,
+        not something a caller may declare. A caller who "knows" it is exactly
+        how the fixed ``tdMode`` bug got in.
+        """
+        return self._acct_level
 
     def to_native(self, symbol: str) -> str:
         sym = parse_symbol(symbol)
@@ -263,6 +277,46 @@ class OKX(BaseExchange):
         result = self._check(data)
         return _parse_balance(result, data)
 
+    async def fetch_account_config(self) -> dict[str, Any]:
+        """``GET /api/v5/account/config`` — the account's own settings row.
+
+        Caches ``acctLv`` for :meth:`_spot_td_mode`. Also carries ``posMode``
+        (one-way vs hedge), ``perm`` and ``kycLv``, which callers use for a
+        read-only connectivity probe.
+        """
+        path = "/api/v5/account/config"
+        data = await self._http.get(path, headers=self._auth_headers("GET", path))
+        result = self._check(data)
+        row: dict[str, Any] = result[0] if result else {}
+        level = str(row.get("acctLv") or "")
+        if level:
+            self._acct_level = level
+        return row
+
+    async def _spot_td_mode(self) -> str:
+        """The ``tdMode`` an OKX **spot** order must carry, from the measured account level.
+
+        🚨 acctLv 1 (Simple) / 2 (Single-currency margin) take ``cash``; 3
+        (Multi-currency margin) / 4 (Portfolio margin) reject ``cash`` outright
+        — ``51000 Parameter tdMode error``, which wiped out four live scenarios
+        on 2026-09-10 — and require ``cross``. Any other value (missing, empty,
+        or a level OKX adds later) raises: an unrecognised account is a reason
+        to **not send the order**, never a reason to fall back to ``cash``.
+        """
+        if self._acct_level is None:
+            await self.fetch_account_config()
+        level = self._acct_level
+        if level in ("1", "2"):
+            return "cash"
+        if level in ("3", "4"):
+            return "cross"
+        raise ExchangeError(
+            f"okx: cannot decide spot tdMode — account level (acctLv) is {level!r}. "
+            "Measure it with fetch_account_config(); pycex will not guess 'cash'.",
+            code="acctLv",
+            exchange="okx",
+        )
+
     async def fetch_positions(self, symbols: list[str] | None = None) -> list[Position]:
         if self.market_type != "linear":
             return await super().fetch_positions(symbols)
@@ -311,10 +365,12 @@ class OKX(BaseExchange):
         """
         path = "/api/v5/trade/order"
         native = self.to_native(symbol)
+        td_mode = self._td_mode if self.market_type == "linear" else await self._spot_td_mode()
         body: dict[str, Any] = {
             "instId": native,
-            # SWAP requires cross/isolated margin mode; SPOT is always "cash".
-            "tdMode": self._td_mode if self.market_type == "linear" else "cash",
+            # SWAP takes the configured cross/isolated margin mode; SPOT's mode
+            # depends on the account level — see _spot_td_mode (A-3).
+            "tdMode": td_mode,
             "side": side.lower(),
             "ordType": "limit" if order_type.lower() == "limit" else "market",
             "sz": str(amount),

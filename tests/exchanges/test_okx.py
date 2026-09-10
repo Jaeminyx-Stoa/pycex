@@ -45,6 +45,17 @@ from tests.conftest import load_fixture
 
 SECRET = "s"
 
+#: A/3: 현물 주문은 acctLv 를 실측한 뒤에만 나간다. 계좌 등급이 주제가 아닌
+#: 테스트는 이 응답을 먼저 물려 두거나 _spot_with_known_account_level() 을 쓴다.
+_ACCT_CONFIG = {"code": "0", "msg": "", "data": [{"acctLv": "1", "posMode": "net_mode"}]}
+
+
+def _spot_with_known_account_level() -> OKX:
+    """등급을 이미 실측해 둔 현물 어댑터(추가 요청 없이 주문 한 건만 나간다)."""
+    ex = OKX(api_key="k", secret="s", passphrase="p")
+    ex._acct_level = "1"
+    return ex
+
 
 def _assert_valid_signature(request: httpx.Request, secret: str = SECRET) -> None:
     """Recompute HMAC-SHA256 independently (plain ``hmac``/``base64``, not the
@@ -527,12 +538,14 @@ async def test_create_order_linear_uses_td_mode_and_no_pos_side(httpx_mock: HTTP
     await ex.close()
 
 
-async def test_create_order_spot_uses_cash_td_mode(httpx_mock: HTTPXMock) -> None:
+async def test_create_order_spot_td_mode_comes_from_account_level(httpx_mock: HTTPXMock) -> None:
+    """현물 tdMode 는 고정값이 아니라 실측한 acctLv 에서 나온다 — 자세한 것은
+    tests/exchanges/test_okx_td_mode.py (A-3)."""
+    httpx_mock.add_response(json=_ACCT_CONFIG)
     httpx_mock.add_response(json={"code": "0", "msg": "", "data": [{"ordId": "1"}]})
     ex = OKX(api_key="k", secret="s", passphrase="p")
     await ex.create_order("BTC/USDT", "buy", "limit", 0.001, 50000.0)
-    req = httpx_mock.get_request()
-    body = json_lib.loads(req.content.decode())
+    body = json_lib.loads(httpx_mock.get_requests()[-1].content.decode())
     assert body["tdMode"] == "cash"
     await ex.close()
 
@@ -545,10 +558,11 @@ async def test_create_order_signature_matches_verbatim_wire_body(httpx_mock: HTT
     over a dict that gets re-serialized separately by httpx — otherwise every
     real order would fail OKX's signature check. Recomputes independently from
     the real captured request rather than calling the adapter's own signer."""
+    httpx_mock.add_response(json=_ACCT_CONFIG)
     httpx_mock.add_response(json={"code": "0", "msg": "", "data": [{"ordId": "1"}]})
     ex = OKX(api_key="k", secret="s", passphrase="p")
     await ex.create_order("BTC/USDT", "buy", "limit", 0.001, 50000.0)
-    req = httpx_mock.get_request()
+    req = httpx_mock.get_requests()[-1]
     assert req.headers["Content-Type"] == "application/json"
     _assert_valid_signature(req)
     await ex.close()
@@ -575,7 +589,7 @@ async def test_create_order_scode_rejection_raises_insufficient_balance(httpx_mo
             "data": [{"ordId": "", "clOrdId": "", "tag": "", "sCode": "51008", "sMsg": "Insufficient balance"}],
         }
     )
-    ex = OKX(api_key="k", secret="s", passphrase="p")
+    ex = _spot_with_known_account_level()
     with pytest.raises(InsufficientBalanceError):
         await ex.create_order("BTC/USDT", "buy", "market", 1000)
     await ex.close()
@@ -599,7 +613,7 @@ async def test_create_order_scode_zero_does_not_raise(httpx_mock: HTTPXMock) -> 
     httpx_mock.add_response(
         json={"code": "0", "msg": "", "data": [{"ordId": "1", "clOrdId": "", "sCode": "0", "sMsg": ""}]}
     )
-    ex = OKX(api_key="k", secret="s", passphrase="p")
+    ex = _spot_with_known_account_level()
     order = await ex.create_order("BTC/USDT", "buy", "market", 1)
     assert order.id == "1"
     await ex.close()
