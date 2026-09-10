@@ -18,6 +18,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 HTTP = ROOT / "src" / "pycex" / "http.py"
 BASE = ROOT / "src" / "pycex" / "base.py"
 CHANGELOG = ROOT / "CHANGELOG.md"
+CONFTEST = ROOT / "tests" / "conftest.py"
+SCAN = ROOT / "scripts" / "secret_scan.py"
 
 # (라벨, 파일, 찾을 것, 바꿀 것, 빨강이어야 할 테스트)
 MUTATIONS: list[tuple[str, pathlib.Path, str, str, list[str]]] = [
@@ -67,6 +69,24 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, list[str]]] = [
         "and **nothing verifies that it excludes unsettled\n        proceeds**",
         "and it is a settlement guarantee",
         ["tests/test_available_balance_contract.py"],
+    ),
+    (
+        "A2-6 네트워크 차단 해제 (테스트가 다시 실 거래소로 나갈 수 있게)",
+        CONFTEST,
+        """    if request.node.get_closest_marker("live"):
+        return
+""",
+        """    if request.node.get_closest_marker("live") or True:
+        return
+""",
+        ["tests/test_no_network_guard.py"],
+    ),
+    (
+        "A2-7 훑개의 자격증명 필드 탐지 제거 (심어도 못 잡게)",
+        SCAN,
+        """    for m in CREDENTIAL_FIELDS.finditer(text):""",
+        """    for m in []:""",
+        ["tests/test_public_repo_secrets.py"],
     ),
 ]
 
