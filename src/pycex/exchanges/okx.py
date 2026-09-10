@@ -789,10 +789,13 @@ def _attached_algo_orders(tp_px: float | None, sl_px: float | None) -> dict[str,
 
 
 def _num(value: float) -> str:
-    """Render a number the way OKX's string params expect it.
+    """Render a number in OKX's canonical string form: ``3.0`` -> ``"3"``.
 
-    ``str(3.0)`` is ``"3.0"``, which OKX rejects for ``lever``; an integral
-    value has to go out as ``"3"``. Fractional values keep their digits.
+    Measured, so it is not overstated: the 2026-09-10 ledger shows the harness
+    sending ``lever: "3.0"`` and OKX accepting it (``code 0``, echoing
+    ``"3.0"``). So this is normalisation, not a rejection being avoided — it
+    keeps ``lever``, trigger prices and sizes in one shape instead of letting
+    Python float repr decide. Fractional values keep their digits.
     """
     return str(int(value)) if float(value).is_integer() else str(value)
 

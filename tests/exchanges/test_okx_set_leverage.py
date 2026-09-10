@@ -59,7 +59,11 @@ async def test_set_leverage_defaults_to_cross(httpx_mock: HTTPXMock) -> None:
 
 
 async def test_integral_leverage_is_not_sent_as_a_float(httpx_mock: HTTPXMock) -> None:
-    """``"3.0"`` 은 OKX 가 받지 않는다. 3 은 "3" 으로, 1.5 는 "1.5" 로 보낸다."""
+    """표기를 한 모양으로 정규화한다 — 3 은 "3", 1.5 는 "1.5".
+
+    (실측 정정: 09-10 원장을 보면 OKX 는 "3.0" 도 받아준다. 거부를 피하는 게
+    아니라 파이썬 float 표기가 와이어 모양을 정하지 못하게 하는 것이다.)
+    """
     httpx_mock.add_response(json=_ACK, is_reusable=True)
     ex = _swap()
     await ex.set_leverage("BTC/USDT:USDT", 3.0, "isolated")
