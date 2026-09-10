@@ -381,6 +381,10 @@ class OKX(BaseExchange):
         price: float | None = None,
         *,
         client_order_id: str | None = None,
+        reduce_only: bool = False,
+        tgt_ccy: str | None = None,
+        tp_px: float | None = None,
+        sl_px: float | None = None,
     ) -> Order:
         """Place an order.
 
@@ -389,6 +393,18 @@ class OKX(BaseExchange):
         a retry reuses a key or mints a new one is the caller's policy, not the
         SDK's. OKX accepts 1-32 alphanumeric characters; anything else is
         rejected here, before the request goes out.
+
+        ``reduce_only`` (SWAP only) marks an order that may only shrink an open
+        position. ``tp_px``/``sl_px`` attach a take-profit / stop-loss to the
+        order (``attachAlgoOrds``, both triggering a market exit).
+
+        ``tgt_ccy`` names the unit of ``amount`` on a **spot market** order:
+        ``"quote_ccy"`` (spend N USDT) or ``"base_ccy"`` (trade N BTC). It is
+        always sent on such orders — defaulting to ``quote_ccy`` for a buy and
+        ``base_ccy`` for a sell — rather than left to OKX's own default, which
+        would silently turn "10 USDT worth" into "10 BTC" if the venue ever
+        changed it. Every other order shape rejects it: on a limit order OKX
+        ignores it, and a silently ignored parameter is worse than an error.
         """
         path = "/api/v5/trade/order"
         native = self.to_native(symbol)
@@ -404,6 +420,36 @@ class OKX(BaseExchange):
         }
         if client_order_id is not None:
             body["clOrdId"] = _validated_client_order_id(client_order_id)
+        is_spot_market = self.market_type == "spot" and body["ordType"] == "market"
+        if tgt_ccy is not None:
+            if not is_spot_market:
+                raise InvalidOrderError(
+                    "okx: tgt_ccy applies to spot market orders only "
+                    f"(market_type={self.market_type!r}, ordType={body['ordType']!r})",
+                    code="tgtCcy",
+                    exchange="okx",
+                )
+            if tgt_ccy not in ("base_ccy", "quote_ccy"):
+                raise InvalidOrderError(
+                    f"okx: tgt_ccy must be 'base_ccy' or 'quote_ccy', got {tgt_ccy!r}",
+                    code="tgtCcy",
+                    exchange="okx",
+                )
+            body["tgtCcy"] = tgt_ccy
+        elif is_spot_market:
+            body["tgtCcy"] = "quote_ccy" if body["side"] == "buy" else "base_ccy"
+        if reduce_only:
+            if self.market_type != "linear":
+                raise InvalidOrderError(
+                    "okx: reduce_only applies to SWAP (market_type='linear') only — "
+                    "a spot balance has no position to reduce",
+                    code="reduceOnly",
+                    exchange="okx",
+                )
+            body["reduceOnly"] = "true"
+        algo = _attached_algo_orders(tp_px, sl_px)
+        if algo is not None:
+            body["attachAlgoOrds"] = [algo]
         if OKX_BROKER_ID:
             body["tag"] = OKX_BROKER_ID
         if price is not None:
@@ -682,6 +728,30 @@ def _error_mapper(status: int, data: dict[str, Any]) -> PyCexError | None:
     if code is None:
         return None
     return _map_error(str(code), str(data.get("msg", "Unknown error")))
+
+
+def _attached_algo_orders(tp_px: float | None, sl_px: float | None) -> dict[str, str] | None:
+    """Build OKX's ``attachAlgoOrds`` entry for an attached TP/SL.
+
+    ``tpOrdPx``/``slOrdPx`` of ``"-1"`` means "exit at market when triggered".
+    A non-positive or non-finite trigger is refused rather than sent: it would
+    be rejected or silently ignored, and either way the caller would believe a
+    stop was in place.
+    """
+    algo: dict[str, str] = {}
+    for label, px, trigger_key, order_key in (
+        ("tp_px", tp_px, "tpTriggerPx", "tpOrdPx"),
+        ("sl_px", sl_px, "slTriggerPx", "slOrdPx"),
+    ):
+        if px is None:
+            continue
+        if not math.isfinite(px) or px <= 0:
+            raise InvalidOrderError(
+                f"okx: {label} must be a finite positive price, got {px!r}", code=label, exchange="okx"
+            )
+        algo[trigger_key] = _num(px)
+        algo[order_key] = "-1"
+    return algo or None
 
 
 def _num(value: float) -> str:
