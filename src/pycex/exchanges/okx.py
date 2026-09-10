@@ -319,6 +319,25 @@ class OKX(BaseExchange):
             exchange="okx",
         )
 
+    async def fetch_available_balance(self, asset: str) -> float:
+        """``GET /api/v5/account/balance?ccy=<asset>`` -> that currency's ``availBal``.
+
+        ``availBal`` is the settled, tradable figure — deliberately **not**
+        ``cashBal``/``eq``, which still count a fill that has not settled and
+        would walk straight back into ``51008``. Unknown currency -> ``0.0``;
+        a failed query raises rather than reporting a comfortable zero.
+        """
+        path = "/api/v5/account/balance"
+        params = {"ccy": asset.upper()}
+        full_path = f"{path}?{urlencode(params)}"
+        data = await self._http.get(path, params=params, headers=self._auth_headers("GET", full_path))
+        result = self._check(data)
+        for account in result:
+            for detail in account.get("details", []):
+                if str(detail.get("ccy", "")).upper() == asset.upper():
+                    return float(detail.get("availBal", 0) or 0)
+        return 0.0
+
     async def fetch_positions(self, symbols: list[str] | None = None) -> list[Position]:
         if self.market_type != "linear":
             return await super().fetch_positions(symbols)

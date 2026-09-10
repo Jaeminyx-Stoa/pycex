@@ -32,6 +32,7 @@ _SYNC_TARGETS = (
     "fetch_positions",
     "fetch_funding_rate",
     "set_leverage",
+    "fetch_available_balance",
 )
 
 
@@ -123,6 +124,7 @@ class BaseExchange(ABC):
         def set_leverage_sync(
             self, symbol: str, lever: float, mgn_mode: str = "cross"
         ) -> dict[str, Any]: ...
+        def fetch_available_balance_sync(self, asset: str) -> float: ...
 
     def __init_subclass__(cls, **kw: Any) -> None:
         super().__init_subclass__(**kw)
@@ -286,6 +288,23 @@ class BaseExchange(ABC):
 
     @abstractmethod
     async def fetch_balance(self) -> Balance: ...
+
+    async def fetch_available_balance(self, asset: str) -> float:
+        """How much of ``asset`` is **available to trade right now**, measured.
+
+        🚨 This is the only honest answer to "has my last fill settled yet".
+        A sell placed against a balance that has not settled comes back
+        rejected — OKX ``51008``, which held a live sell off for ~70 seconds on
+        2026-09-10 — and the way through is to ask the venue again, not to
+        retry blindly against a local ledger.
+
+        Therefore: every call re-measures, nothing is cached, and there is no
+        retry loop here. Waiting is the caller's policy (see the settlement-
+        aware execution loop, P-1).
+        """
+        balance = await self.fetch_balance()
+        entry = balance.get(asset)
+        return entry.free if entry else 0.0
 
     async def fetch_positions(self, symbols: list[str] | None = None) -> list[Position]:
         raise NotSupportedError(f"{self.name}:{self.market_type} has no positions")
