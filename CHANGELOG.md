@@ -23,8 +23,27 @@ request/response pairs from those runs are kept in
   (and its connection pool) was built once in `HTTPClient.__init__` and bound
   to the first loop — so the **second** call died with `RuntimeError: Event
   loop is closed`. `HTTPClient` now tracks the loop its client belongs to and
-  rebuilds client, transport and rate limiter when the loop changes or the
-  client was closed; each sync twin releases the pool before its loop dies.
+  rebuilds the client **and its transport** when the loop changes or the client
+  was closed; each sync twin releases the pool before its loop dies. The rate
+  limiter is deliberately **not** rebuilt — its token budget belongs to the
+  `HTTPClient`, not to one loop (see below).
+- **An injected transport survives the rebuild — it used to be silently
+  dropped.** Recorded-fixture tests installed a mock by assigning a finished
+  `httpx.AsyncClient` to `HTTPClient._client`. Because the rebuild in `_bind()`
+  only knows about `transport_factory`, the **second** `*_sync` call built a
+  real client and went out to the live venue: a probe on 2026-09-10 saw call 1
+  return the mocked `last=1.0` and call 2 return `78048.9` — a genuine OKX
+  price — from an `AsyncHTTPTransport`. Injecting a client object is now
+  rejected (`_client` is read-only); `HTTPClient.set_transport_factory()` is the
+  one supported path, and a factory that returns `None` raises rather than
+  letting httpx substitute a real transport.
+- **The rate limiter is no longer reset on every `*_sync` call.** `_bind()`
+  rebuilt the `RateLimiter` along with the client, and a fresh bucket starts
+  full — so every sync call was a "first" call and the limit did not exist.
+  Measured on 2026-09-10: 40 calls took 0.03 s via the sync twins against
+  3.02 s via `await` at `rate=10/s`; both are 3.0 s now. Only the loop-bound
+  `asyncio.Lock` is rebuilt when the running loop changes; the token budget
+  carries over.
 - **Spot `tdMode` is decided from the measured account level, never assumed.**
   It was hard-coded to `"cash"`, which an `acctLv=3` (multi-currency margin)
   account rejects outright — `51000 Parameter tdMode error` wiped out four
