@@ -34,12 +34,28 @@ _SYNC_TARGETS = (
 )
 
 
+async def _call_and_release(self: BaseExchange, name: str, a: tuple[Any, ...], kw: dict[str, Any]) -> Any:
+    """Run one async call and hand the connection pool back before the loop dies.
+
+    ``asyncio.run`` closes the loop it created. A pool left open across that
+    boundary is unusable — every later request against it raises
+    ``RuntimeError: Event loop is closed`` — so the twin releases it here and
+    ``HTTPClient._bind`` builds a fresh one on the next call.
+    """
+    try:
+        return await getattr(self, name)(*a, **kw)
+    finally:
+        http = getattr(self, "_http", None)
+        if http is not None:
+            await http.close()
+
+
 def _make_sync(name: str) -> Callable[..., Any]:
     def _sync(self: BaseExchange, *a: Any, **kw: Any) -> Any:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(getattr(self, name)(*a, **kw))
+            return asyncio.run(_call_and_release(self, name, a, kw))
         raise RuntimeError(f"{name}_sync called inside a running event loop; await {name}() instead")
 
     _sync.__name__ = f"{name}_sync"

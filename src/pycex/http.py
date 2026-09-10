@@ -41,7 +41,17 @@ class RateLimiter:
 
 
 class HTTPClient:
-    """Async HTTP client for exchange API calls."""
+    """Async HTTP client for exchange API calls.
+
+    The underlying ``httpx.AsyncClient`` owns a connection pool, and that pool
+    belongs to the event loop it was first used in. The blocking ``*_sync``
+    twins drive each call through its own ``asyncio.run`` (see
+    ``pycex.base._make_sync``), so a client built once in ``__init__`` is dead
+    from the second call onwards — ``RuntimeError: Event loop is closed``.
+    This client therefore tracks which loop its ``httpx.AsyncClient`` is bound
+    to and builds a fresh one whenever the running loop changes or the current
+    one has been closed. See ``tests/test_sync_twins.py`` (A-1).
+    """
 
     def __init__(
         self,
@@ -51,19 +61,73 @@ class HTTPClient:
         rate: float = 10.0,
         default_headers: dict[str, str] | None = None,
         error_mapper: Callable[[int, dict[str, Any]], PyCexError | None] | None = None,
+        transport_factory: Callable[[], httpx.AsyncBaseTransport] | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._default_headers = default_headers or {}
-        self._client = httpx.AsyncClient(base_url=self._base_url, timeout=timeout, headers=self._default_headers)
+        self._timeout = timeout
+        self._rate = rate
+        self._transport_factory = transport_factory
+        self._client_obj: httpx.AsyncClient | None = None
+        self._client_loop: asyncio.AbstractEventLoop | None = None
         self._limiter = RateLimiter(rate)
         self._error_mapper = error_mapper
+
+    def _new_client(self) -> httpx.AsyncClient:
+        """Build a client — and, with it, a **new transport/pool** for the loop
+        that is about to use it. Reusing the previous transport is exactly the
+        bug this class exists to avoid, so a ``transport_factory`` is called
+        again for every rebuild."""
+        transport = self._transport_factory() if self._transport_factory is not None else None
+        return httpx.AsyncClient(
+            base_url=self._base_url,
+            timeout=self._timeout,
+            headers=self._default_headers,
+            transport=transport,
+        )
+
+    @property
+    def _client(self) -> httpx.AsyncClient:
+        """The current client. Building one here (outside a running loop) is
+        allowed so callers can install ``event_hooks`` before the first request;
+        the loop binding is decided later, in :meth:`_bind`."""
+        if self._client_obj is None:
+            self._client_obj = self._new_client()
+        return self._client_obj
+
+    @_client.setter
+    def _client(self, client: httpx.AsyncClient) -> None:
+        # A caller-supplied client (e.g. a recorded-fixture transport) has no
+        # loop yet — the next request adopts it rather than replacing it.
+        self._client_obj = client
+        self._client_loop = None
+
+    async def _bind(self) -> httpx.AsyncClient:
+        """Return a client owned by the loop that is running **right now**.
+
+        Rebuilds when the loop changed under us or the current client was
+        closed; the rate limiter is rebuilt with it because ``asyncio.Lock``
+        binds to a loop on first contention.
+        """
+        loop = asyncio.get_running_loop()
+        client = self._client_obj
+        if client is None or client.is_closed or (self._client_loop is not None and self._client_loop is not loop):
+            hooks = client.event_hooks if client is not None else None
+            client = self._new_client()
+            if hooks:
+                client.event_hooks = hooks
+            self._client_obj = client
+            self._limiter = RateLimiter(self._rate)
+        self._client_loop = loop
+        return client
 
     async def get(
         self, path: str, *, params: dict[str, Any] | None = None, headers: dict[str, str] | None = None
     ) -> Any:
+        client = await self._bind()
         await self._limiter.acquire()
         try:
-            resp = await self._client.get(path, params=params, headers=headers)
+            resp = await client.get(path, params=params, headers=headers)
             return self._handle_response(resp)
         except httpx.HTTPError as e:
             raise NetworkError(str(e)) from e
@@ -76,9 +140,10 @@ class HTTPClient:
         headers: dict[str, str] | None = None,
         params: dict[str, Any] | None = None,
     ) -> Any:
+        client = await self._bind()
         await self._limiter.acquire()
         try:
-            resp = await self._client.post(path, json=data, headers=headers, params=params)
+            resp = await client.post(path, json=data, headers=headers, params=params)
             return self._handle_response(resp)
         except httpx.HTTPError as e:
             raise NetworkError(str(e)) from e
@@ -86,9 +151,10 @@ class HTTPClient:
     async def delete(
         self, path: str, *, params: dict[str, Any] | None = None, headers: dict[str, str] | None = None
     ) -> Any:
+        client = await self._bind()
         await self._limiter.acquire()
         try:
-            resp = await self._client.delete(path, params=params, headers=headers)
+            resp = await client.delete(path, params=params, headers=headers)
             return self._handle_response(resp)
         except httpx.HTTPError as e:
             raise NetworkError(str(e)) from e
@@ -105,10 +171,11 @@ class HTTPClient:
         going through ``post()``'s ``json=`` would re-serialize and silently
         break every such signature.
         """
+        client = await self._bind()
         await self._limiter.acquire()
         merged_headers = {"Content-Type": "application/json", **(headers or {})}
         try:
-            resp = await self._client.post(path, content=body.encode(), headers=merged_headers)
+            resp = await client.post(path, content=body.encode(), headers=merged_headers)
             return self._handle_response(resp)
         except httpx.HTTPError as e:
             raise NetworkError(str(e)) from e
@@ -124,11 +191,12 @@ class HTTPClient:
         the literal encoded body — get a byte-for-byte match between what they signed
         and what goes over the wire.
         """
+        client = await self._bind()
         await self._limiter.acquire()
         body = urlencode(data or {}, doseq=True)
         merged_headers = {"Content-Type": "application/x-www-form-urlencoded", **(headers or {})}
         try:
-            resp = await self._client.post(path, content=body, headers=merged_headers)
+            resp = await client.post(path, content=body, headers=merged_headers)
             return self._handle_response(resp)
         except httpx.HTTPError as e:
             raise NetworkError(str(e)) from e
@@ -156,4 +224,9 @@ class HTTPClient:
         return data
 
     async def close(self) -> None:
-        await self._client.aclose()
+        """Close the current client. The object is kept so that a later call can
+        see it is closed and build a replacement (``*_sync`` twins close after
+        every call — see ``pycex.base._make_sync``)."""
+        client = self._client_obj
+        if client is not None and not client.is_closed:
+            await client.aclose()
