@@ -11,6 +11,9 @@ class Order(BaseModel):
     """Unified order data."""
 
     id: str
+    #: Caller-supplied idempotency key echoed back by the venue (OKX ``clOrdId``).
+    #: ``None`` when the caller did not supply one — pycex never invents one.
+    client_order_id: str | None = None
     symbol: str
     side: str
     type: str

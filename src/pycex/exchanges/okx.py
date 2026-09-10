@@ -61,6 +61,7 @@ canonical symbols or ``*-USD-SWAP`` native symbols raise
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Literal
 from urllib.parse import urlencode
 
@@ -71,6 +72,7 @@ from pycex.exceptions import (
     AuthenticationError,
     ExchangeError,
     InsufficientBalanceError,
+    InvalidOrderError,
     OrderNotFoundError,
     PyCexError,
     RateLimitError,
@@ -290,8 +292,23 @@ class OKX(BaseExchange):
     # ── Trading ──
 
     async def create_order(
-        self, symbol: str, side: str, order_type: str, amount: float, price: float | None = None
+        self,
+        symbol: str,
+        side: str,
+        order_type: str,
+        amount: float,
+        price: float | None = None,
+        *,
+        client_order_id: str | None = None,
     ) -> Order:
+        """Place an order.
+
+        ``client_order_id`` is OKX's ``clOrdId`` — the venue-level idempotency
+        key. pycex sends what it is given and **never generates one**: whether
+        a retry reuses a key or mints a new one is the caller's policy, not the
+        SDK's. OKX accepts 1-32 alphanumeric characters; anything else is
+        rejected here, before the request goes out.
+        """
         path = "/api/v5/trade/order"
         native = self.to_native(symbol)
         body: dict[str, Any] = {
@@ -302,6 +319,8 @@ class OKX(BaseExchange):
             "ordType": "limit" if order_type.lower() == "limit" else "market",
             "sz": str(amount),
         }
+        if client_order_id is not None:
+            body["clOrdId"] = _validated_client_order_id(client_order_id)
         if OKX_BROKER_ID:
             body["tag"] = OKX_BROKER_ID
         if price is not None:
@@ -311,11 +330,10 @@ class OKX(BaseExchange):
         # posSide="long"/"short" on every order — see module docstring.
         body_str = json.dumps(body)
         data = await self._http.post_raw(path, body=body_str, headers=self._auth_headers("POST", path, body_str))
-        result = self._check(data)
-        r = result[0] if result else {}
-        _raise_on_scode(r)
+        r = _check_order_response(data)
         return Order(
             id=r.get("ordId", ""),
+            client_order_id=r.get("clOrdId") or client_order_id or None,
             symbol=symbol,
             side=side.lower(),
             type=order_type.lower(),
@@ -330,10 +348,16 @@ class OKX(BaseExchange):
         body = {"instId": native, "ordId": order_id}
         body_str = json.dumps(body)
         data = await self._http.post_raw(path, body=body_str, headers=self._auth_headers("POST", path, body_str))
-        result = self._check(data)
-        r = result[0] if result else {}
-        _raise_on_scode(r)
-        return Order(id=r.get("ordId", order_id), symbol=symbol, side="", type="", amount=0, raw=data)
+        r = _check_order_response(data)
+        return Order(
+            id=r.get("ordId", order_id),
+            client_order_id=r.get("clOrdId") or None,
+            symbol=symbol,
+            side="",
+            type="",
+            amount=0,
+            raw=data,
+        )
 
     async def fetch_order(self, order_id: str, symbol: str) -> Order:
         native = self.to_native(symbol)
@@ -540,6 +564,7 @@ def _parse_my_trade(symbol: str, t: dict[str, Any]) -> MyTrade:
 def _parse_order(symbol: str, d: dict[str, Any]) -> Order:
     return Order(
         id=d.get("ordId", ""),
+        client_order_id=d.get("clOrdId") or None,
         symbol=symbol,
         side=d.get("side", "").lower(),
         type=d.get("ordType", "").lower(),
@@ -574,6 +599,51 @@ def _error_mapper(status: int, data: dict[str, Any]) -> PyCexError | None:
     if code is None:
         return None
     return _map_error(str(code), str(data.get("msg", "Unknown error")))
+
+
+#: OKX ``clOrdId``: 1-32 alphanumeric characters (letters and digits only).
+_CLIENT_ORDER_ID_RE = re.compile(r"^[A-Za-z0-9]{1,32}$")
+
+
+def _validated_client_order_id(value: str) -> str:
+    """Reject a ``clOrdId`` OKX would refuse — here, not on the wire.
+
+    Sending a malformed key and reading the rejection back is not "validation":
+    the order did not go out, the caller cannot tell that apart from a venue
+    outage, and an empty string silently turns idempotency **off**.
+    """
+    if not _CLIENT_ORDER_ID_RE.match(value):
+        raise InvalidOrderError(
+            f"okx: client_order_id must be 1-32 alphanumeric characters, got {value!r}",
+            code="client_order_id",
+            exchange="okx",
+        )
+    return value
+
+
+def _check_order_response(data: dict[str, Any]) -> dict[str, Any]:
+    """Return ``data[0]`` of an order/cancel response, raising the **per-item**
+    rejection when there is one.
+
+    🚨 Live wire shape (2026-09-10 ledger, 32 rejected orders): a rejected order
+    comes back HTTP 200 with top-level ``code == "1"`` and an empty top-level
+    ``msg``; the reason lives in ``data[0].sCode``/``sMsg`` (``51000 Parameter
+    tdMode error``, ``51008 ...``). Reading the top-level code first — as
+    ``_check`` does — throws away the only informative field and reports every
+    rejection as the meaningless code ``"1"``.
+    """
+    rows = data.get("data") or []
+    row: dict[str, Any] = rows[0] if rows else {}
+    if row:
+        _raise_on_scode(row)
+    _check_data_code(data)
+    return row
+
+
+def _check_data_code(data: dict[str, Any]) -> None:
+    code = str(data.get("code", "0"))
+    if code != "0":
+        raise _map_error(code, str(data.get("msg", "") or "Unknown error"))
 
 
 def _raise_on_scode(item: dict[str, Any]) -> None:
