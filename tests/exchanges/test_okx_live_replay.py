@@ -51,7 +51,9 @@ def _adapter(labels: list[str], *, market_type: str = "spot", td_mode: str = "cr
         market_type=market_type,  # type: ignore[arg-type]
         td_mode=td_mode,  # type: ignore[arg-type]
     )
-    ex._http._client = httpx.AsyncClient(base_url="https://www.okx.com", transport=httpx.MockTransport(handler))
+    # A2-1: 클라이언트 «객체»를 꽂으면 sync 트윈 2회차의 재빌드에서 벗겨져 실 OKX 로 나간다.
+    # 팩토리로 꽂으면 재빌드마다 다시 불려 목이 유지된다 — 이 파일의 «네트워크 0» 은 그 위에 선다.
+    ex._http.set_transport_factory(lambda: httpx.MockTransport(handler))
     ex.sent = sent  # type: ignore[attr-defined]
     return ex
 

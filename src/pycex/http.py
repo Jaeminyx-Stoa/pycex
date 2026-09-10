@@ -78,7 +78,14 @@ class HTTPClient:
         that is about to use it. Reusing the previous transport is exactly the
         bug this class exists to avoid, so a ``transport_factory`` is called
         again for every rebuild."""
-        transport = self._transport_factory() if self._transport_factory is not None else None
+        transport = None
+        if self._transport_factory is not None:
+            transport = self._transport_factory()
+            if transport is None:
+                # httpx would quietly substitute a real ``AsyncHTTPTransport``
+                # here, so a caller who injected a factory to stay offline would
+                # go out to the live venue without ever being told.
+                raise TypeError("transport_factory returned None; it must return an httpx transport")
         return httpx.AsyncClient(
             base_url=self._base_url,
             timeout=self._timeout,
@@ -86,21 +93,30 @@ class HTTPClient:
             transport=transport,
         )
 
+    def set_transport_factory(self, factory: Callable[[], httpx.AsyncBaseTransport]) -> None:
+        """The **only** supported way to inject a transport (recorded fixtures,
+        offline tests, proxies).
+
+        Injecting a finished ``httpx.AsyncClient`` used to be possible and was a
+        money-path hazard: ``*_sync`` twins close the client after every call and
+        the rebuild in :meth:`_bind` only knows about the factory — so the second
+        call silently built a real client and went out to the live venue. A
+        factory survives every rebuild, so what was injected stays injected.
+        """
+        self._transport_factory = factory
+        self._client_obj = None
+        self._client_loop = None
+
     @property
     def _client(self) -> httpx.AsyncClient:
-        """The current client. Building one here (outside a running loop) is
-        allowed so callers can install ``event_hooks`` before the first request;
-        the loop binding is decided later, in :meth:`_bind`."""
+        """The current client (read-only — inject with :meth:`set_transport_factory`).
+
+        Building one here (outside a running loop) is allowed so callers can
+        install ``event_hooks`` before the first request; the loop binding is
+        decided later, in :meth:`_bind`."""
         if self._client_obj is None:
             self._client_obj = self._new_client()
         return self._client_obj
-
-    @_client.setter
-    def _client(self, client: httpx.AsyncClient) -> None:
-        # A caller-supplied client (e.g. a recorded-fixture transport) has no
-        # loop yet — the next request adopts it rather than replacing it.
-        self._client_obj = client
-        self._client_loop = None
 
     async def _bind(self) -> httpx.AsyncClient:
         """Return a client owned by the loop that is running **right now**.

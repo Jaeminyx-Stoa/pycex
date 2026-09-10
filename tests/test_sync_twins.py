@@ -48,8 +48,7 @@ def _loop_bound_okx() -> tuple[OKX, list[LoopBoundTransport]]:
         return t
 
     ex = OKX()
-    ex._http._transport_factory = factory
-    ex._http._client_obj = None  # 아직 아무 루프에도 묶이지 않은 상태에서 시작
+    ex._http.set_transport_factory(factory)  # A2-1 — 공개 주입 경로 하나뿐이다
     return ex, made
 
 
@@ -143,19 +142,23 @@ def test_two_instances_do_not_share_a_loop_bound_client(httpx_mock: HTTPXMock) -
     b.close_sync()
 
 
-def test_injected_client_is_adopted_not_replaced() -> None:
-    """우회 4 — 밖에서 꽂아준 클라이언트(기록 픽스처·요청 훅)를 첫 호출이 삼키지 않는다."""
+def test_injected_transport_is_adopted_not_replaced() -> None:
+    """우회 4 — 밖에서 꽂아준 전송계층(기록 픽스처)과 요청 훅을 첫 호출이 삼키지 않는다.
+
+    (A2-1 이후 주입 경로는 :meth:`HTTPClient.set_transport_factory` 하나다.
+    클라이언트 «객체» 주입은 재빌드에서 벗겨지므로 거부된다 —
+    ``tests/test_transport_injection.py`` 참조.)
+    """
     seen: list[str] = []
 
     async def hook(request: httpx.Request) -> None:
         seen.append(request.url.path)
 
     ex = OKX()
-    ex._http._client = httpx.AsyncClient(
-        base_url="https://www.okx.com",
-        transport=httpx.MockTransport(lambda r: httpx.Response(200, json=_TICKER)),
-        event_hooks={"request": [hook]},
+    ex._http.set_transport_factory(
+        lambda: httpx.MockTransport(lambda r: httpx.Response(200, json=_TICKER))
     )
+    ex._http._client.event_hooks = {"request": [hook]}
 
     async def _run() -> None:
         await ex.fetch_ticker("BTC/USDT")
