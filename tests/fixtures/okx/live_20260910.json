@@ -1,0 +1,392 @@
+{
+  "note": "2026-09-10 OKX 실계좌 실행 6회의 요청/응답 원본. 실키·서명은 원장에 기록되지 않는다.",
+  "pairs": {
+    "account_config_acctlv3": {
+      "scenario": "preflight",
+      "source": "20260910-000734",
+      "request": {
+        "method": "GET",
+        "path": "/api/v5/account/config"
+      },
+      "response": {
+        "code": "0",
+        "msg": "",
+        "data": [
+          {
+            "acctLv": "3",
+            "posMode": "net_mode",
+            "autoLoan": false,
+            "perm": "read_only,trade",
+            "kycLv": "2",
+            "level": "Lv1"
+          }
+        ]
+      }
+    },
+    "swap_reduce_only_close_ok": {
+      "scenario": "S10",
+      "source": "20260910-000734",
+      "request": {
+        "method": "POST",
+        "path": "/api/v5/trade/order",
+        "body": {
+          "instId": "ETH-USDT-SWAP",
+          "tdMode": "cross",
+          "side": "buy",
+          "ordType": "market",
+          "sz": "0.01",
+          "clOrdId": "w11219aa9682a144",
+          "reduceOnly": "true"
+        }
+      },
+      "response": {
+        "code": "0",
+        "data": [
+          {
+            "clOrdId": "w11219aa9682a144",
+            "ordId": "3908972395925655552",
+            "sCode": "0",
+            "sMsg": "Order placed",
+            "subCode": "",
+            "tag": "",
+            "ts": "1788998855547"
+          }
+        ],
+        "inTime": "1788998855546916",
+        "msg": "",
+        "outTime": "1788998855549187"
+      }
+    },
+    "spot_cash_rejected_51000_tdmode": {
+      "scenario": "S10",
+      "source": "20260910-000734",
+      "request": {
+        "method": "POST",
+        "path": "/api/v5/trade/order",
+        "body": {
+          "instId": "ETH-USDT",
+          "tdMode": "cash",
+          "side": "sell",
+          "ordType": "market",
+          "sz": "0.00105",
+          "clOrdId": "w11c6a4ac54a0a94",
+          "tgtCcy": "base_ccy"
+        }
+      },
+      "response": {
+        "code": "1",
+        "data": [
+          {
+            "clOrdId": "w11c6a4ac54a0a94",
+            "ordId": "",
+            "sCode": "51000",
+            "sMsg": "Parameter tdMode error ",
+            "subCode": "",
+            "tag": "",
+            "ts": "1788998858723"
+          }
+        ],
+        "inTime": "1788998858722177",
+        "msg": "All operations failed",
+        "outTime": "1788998858724315"
+      }
+    },
+    "set_leverage_ok": {
+      "scenario": "",
+      "source": "20260910-000749",
+      "request": {
+        "method": "POST",
+        "path": "/api/v5/account/set-leverage",
+        "body": {
+          "instId": "ETH-USDT-SWAP",
+          "lever": "3.0",
+          "mgnMode": "isolated"
+        }
+      },
+      "response": {
+        "code": "0",
+        "data": [
+          {
+            "instId": "ETH-USDT-SWAP",
+            "lever": "3.0",
+            "mgnMode": "isolated",
+            "posSide": ""
+          }
+        ],
+        "msg": ""
+      }
+    },
+    "swap_entry_ok": {
+      "scenario": "S4",
+      "source": "20260910-000749",
+      "request": {
+        "method": "POST",
+        "path": "/api/v5/trade/order",
+        "body": {
+          "instId": "ETH-USDT-SWAP",
+          "tdMode": "isolated",
+          "side": "buy",
+          "ordType": "market",
+          "sz": "0.04",
+          "clOrdId": "w11aa3a782f08ad4"
+        }
+      },
+      "response": {
+        "code": "0",
+        "data": [
+          {
+            "clOrdId": "w11aa3a782f08ad4",
+            "ordId": "3908972901020520448",
+            "sCode": "0",
+            "sMsg": "Order placed",
+            "subCode": "",
+            "tag": "",
+            "ts": "1788998870600"
+          }
+        ],
+        "inTime": "1788998870600225",
+        "msg": "",
+        "outTime": "1788998870600852"
+      }
+    },
+    "swap_limit_with_tp_sl_ok": {
+      "scenario": "S6",
+      "source": "20260910-000749",
+      "request": {
+        "method": "POST",
+        "path": "/api/v5/trade/order",
+        "body": {
+          "instId": "ETH-USDT-SWAP",
+          "tdMode": "isolated",
+          "side": "buy",
+          "ordType": "limit",
+          "sz": "0.01",
+          "clOrdId": "w11a21c83b106eb4",
+          "px": "2442.79",
+          "attachAlgoOrds": [
+            {
+              "tpTriggerPx": "2491.64",
+              "tpOrdPx": "-1",
+              "slTriggerPx": "2393.93",
+              "slOrdPx": "-1"
+            }
+          ]
+        }
+      },
+      "response": {
+        "code": "0",
+        "data": [
+          {
+            "clOrdId": "w11a21c83b106eb4",
+            "ordId": "3908975091051188224",
+            "sCode": "0",
+            "sMsg": "Order placed",
+            "subCode": "",
+            "tag": "",
+            "ts": "1788998935868"
+          }
+        ],
+        "inTime": "1788998935867977",
+        "msg": "",
+        "outTime": "1788998935869033"
+      }
+    },
+    "cancel_ok": {
+      "scenario": "S6",
+      "source": "20260910-000749",
+      "request": {
+        "method": "POST",
+        "path": "/api/v5/trade/cancel-order",
+        "body": {
+          "instId": "ETH-USDT-SWAP",
+          "ordId": "3908975091051188224"
+        }
+      },
+      "response": {
+        "code": "0",
+        "data": [
+          {
+            "clOrdId": "w11a21c83b106eb4",
+            "ordId": "3908975091051188224",
+            "sCode": "0",
+            "sMsg": "",
+            "ts": "1788998940966"
+          }
+        ],
+        "inTime": "1788998940965743",
+        "msg": "",
+        "outTime": "1788998940967702"
+      }
+    },
+    "min_size_rejected_51000_sz": {
+      "scenario": "S7",
+      "source": "20260910-000749",
+      "request": {
+        "method": "POST",
+        "path": "/api/v5/trade/order",
+        "body": {
+          "instId": "BTC-USDT",
+          "tdMode": "cash",
+          "side": "buy",
+          "ordType": "limit",
+          "sz": "1e-07",
+          "clOrdId": "w11fe622e5aad234",
+          "px": "70491.6"
+        }
+      },
+      "response": {
+        "code": "1",
+        "data": [
+          {
+            "clOrdId": "w11fe622e5aad234",
+            "ordId": "",
+            "sCode": "51000",
+            "sMsg": "Parameter sz error",
+            "subCode": "",
+            "tag": "",
+            "ts": "1788998941158"
+          }
+        ],
+        "inTime": "1788998941158276",
+        "msg": "All operations failed",
+        "outTime": "1788998941158410"
+      }
+    },
+    "spot_market_buy_ok": {
+      "scenario": "S1",
+      "source": "20260910-001601",
+      "request": {
+        "method": "POST",
+        "path": "/api/v5/trade/order",
+        "body": {
+          "instId": "BTC-USDT",
+          "tdMode": "cross",
+          "side": "buy",
+          "ordType": "market",
+          "sz": "10.0",
+          "clOrdId": "w11acf1d3304ed64",
+          "tgtCcy": "quote_ccy"
+        }
+      },
+      "response": {
+        "code": "0",
+        "data": [
+          {
+            "clOrdId": "w11acf1d3304ed64",
+            "ordId": "3908989407217373184",
+            "sCode": "0",
+            "sMsg": "Order placed",
+            "subCode": "",
+            "tag": "",
+            "ts": "1788999362523"
+          }
+        ],
+        "inTime": "1788999362522689",
+        "msg": "",
+        "outTime": "1788999362525025"
+      }
+    },
+    "settlement_pending_51008_spot_sell": {
+      "scenario": "S1",
+      "source": "20260910-001601",
+      "request": {
+        "method": "POST",
+        "path": "/api/v5/trade/order",
+        "body": {
+          "instId": "BTC-USDT",
+          "tdMode": "cross",
+          "side": "sell",
+          "ordType": "market",
+          "sz": "0.00012771",
+          "clOrdId": "w11d1dea6b261744",
+          "tgtCcy": "base_ccy"
+        }
+      },
+      "response": {
+        "code": "1",
+        "data": [
+          {
+            "clOrdId": "w11d1dea6b261744",
+            "ordId": "",
+            "sCode": "51008",
+            "sMsg": "Order failed. Your available BTC balance is insufficient, and your available margin (in USD) is too low for borrowing. ",
+            "subCode": "1000",
+            "tag": "",
+            "ts": "1788999364646"
+          }
+        ],
+        "inTime": "1788999364644969",
+        "msg": "All operations failed",
+        "outTime": "1788999364647217"
+      }
+    },
+    "spot_limit_ok": {
+      "scenario": "S2",
+      "source": "20260910-001601",
+      "request": {
+        "method": "POST",
+        "path": "/api/v5/trade/order",
+        "body": {
+          "instId": "BTC-USDT",
+          "tdMode": "cross",
+          "side": "buy",
+          "ordType": "limit",
+          "sz": "0.00012834",
+          "clOrdId": "w1153cff01daeec4",
+          "px": "77912.1"
+        }
+      },
+      "response": {
+        "code": "0",
+        "data": [
+          {
+            "clOrdId": "w1153cff01daeec4",
+            "ordId": "3908989482144419840",
+            "sCode": "0",
+            "sMsg": "Order placed",
+            "subCode": "",
+            "tag": "",
+            "ts": "1788999364756"
+          }
+        ],
+        "inTime": "1788999364755354",
+        "msg": "",
+        "outTime": "1788999364757540"
+      }
+    },
+    "spot_market_sell_ok": {
+      "scenario": "S9",
+      "source": "20260910-001601",
+      "request": {
+        "method": "POST",
+        "path": "/api/v5/trade/order",
+        "body": {
+          "instId": "ETH-USDT",
+          "tdMode": "cross",
+          "side": "sell",
+          "ordType": "market",
+          "sz": "0.000567",
+          "clOrdId": "w111521cad90feb4",
+          "tgtCcy": "base_ccy"
+        }
+      },
+      "response": {
+        "code": "0",
+        "data": [
+          {
+            "clOrdId": "w111521cad90feb4",
+            "ordId": "3908992724576292864",
+            "sCode": "0",
+            "sMsg": "Order placed",
+            "subCode": "",
+            "tag": "",
+            "ts": "1788999461388"
+          }
+        ],
+        "inTime": "1788999461387761",
+        "msg": "",
+        "outTime": "1788999461388370"
+      }
+    }
+  }
+}

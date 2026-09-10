@@ -178,9 +178,11 @@ def test_close_sync_closes_the_async_client() -> None:
     asyncio.run — open."""
     ex = Fake()
     ex._http = HTTPClient("https://example.invalid")
+    client = ex._http._client  # 클라이언트는 지연 생성이므로 먼저 실체화한다
     with ex:
         pass
-    assert ex._http._client.is_closed
+    assert client.is_closed
+    assert ex._http._client_obj is client  # 닫힌 사실이 남아야 다음 호출이 새로 만든다
 
 
 def test_close_sync_inside_running_loop_raises() -> None:

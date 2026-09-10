@@ -26,6 +26,7 @@ from pycex.exceptions import (
     OrderNotFoundError,
     PyCexError,
     RateLimitError,
+    SettlementPendingError,
     SymbolNotFoundError,
 )
 from pycex.exchanges import OKX, Binance, Bitget, Bithumb, Bybit, Korbit, Upbit
@@ -46,7 +47,7 @@ from pycex.models import (
 )
 from pycex.symbols import parse_symbol
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __all__ = [
     "BaseExchange",
     "Binance",
@@ -76,6 +77,7 @@ __all__ = [
     "InsufficientBalanceError",
     "InvalidOrderError",
     "OrderNotFoundError",
+    "SettlementPendingError",
     "NetworkError",
     "SymbolNotFoundError",
     "NotSupportedError",

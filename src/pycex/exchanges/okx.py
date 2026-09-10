@@ -61,6 +61,8 @@ canonical symbols or ``*-USD-SWAP`` native symbols raise
 from __future__ import annotations
 
 import json
+import math
+import re
 from typing import Any, Literal
 from urllib.parse import urlencode
 
@@ -70,10 +72,12 @@ from pycex.constants import OKX_BASE, OKX_BROKER_ID
 from pycex.exceptions import (
     AuthenticationError,
     ExchangeError,
-    InsufficientBalanceError,
+    InvalidOrderError,
+    NotSupportedError,
     OrderNotFoundError,
     PyCexError,
     RateLimitError,
+    SettlementPendingError,
     SymbolNotFoundError,
 )
 from pycex.http import HTTPClient
@@ -143,6 +147,10 @@ class OKX(BaseExchange):
         self.market_type = market_type
         self._td_mode = td_mode
         self._inst_type = "SWAP" if market_type == "linear" else "SPOT"
+        #: Measured OKX account level (``acctLv``). ``None`` until
+        #: :meth:`fetch_account_config` has run — never assumed. See
+        #: :meth:`_spot_td_mode`.
+        self._acct_level: str | None = None
         self.sandbox = self._resolve_sandbox(sandbox, None, demo)
         self._markets: dict[str, Market] = {}
         broker_headers: dict[str, str] = {}
@@ -151,6 +159,16 @@ class OKX(BaseExchange):
         self._http = HTTPClient(
             OKX_BASE, timeout=timeout, rate=10.0, default_headers=broker_headers, error_mapper=_error_mapper
         )
+
+    @property
+    def account_level(self) -> str | None:
+        """The measured OKX account level (``acctLv``), or ``None`` if not measured yet.
+
+        Read-only on purpose: the account level is a fact about the account,
+        not something a caller may declare. A caller who "knows" it is exactly
+        how the fixed ``tdMode`` bug got in.
+        """
+        return self._acct_level
 
     def to_native(self, symbol: str) -> str:
         sym = parse_symbol(symbol)
@@ -261,6 +279,65 @@ class OKX(BaseExchange):
         result = self._check(data)
         return _parse_balance(result, data)
 
+    async def fetch_account_config(self) -> dict[str, Any]:
+        """``GET /api/v5/account/config`` — the account's own settings row.
+
+        Caches ``acctLv`` for :meth:`_spot_td_mode`. Also carries ``posMode``
+        (one-way vs hedge), ``perm`` and ``kycLv``, which callers use for a
+        read-only connectivity probe.
+        """
+        path = "/api/v5/account/config"
+        data = await self._http.get(path, headers=self._auth_headers("GET", path))
+        result = self._check(data)
+        row: dict[str, Any] = result[0] if result else {}
+        level = str(row.get("acctLv") or "")
+        if level:
+            self._acct_level = level
+        return row
+
+    async def _spot_td_mode(self) -> str:
+        """The ``tdMode`` an OKX **spot** order must carry, from the measured account level.
+
+        🚨 acctLv 1 (Simple) / 2 (Single-currency margin) take ``cash``; 3
+        (Multi-currency margin) / 4 (Portfolio margin) reject ``cash`` outright
+        — ``51000 Parameter tdMode error``, which wiped out four live scenarios
+        on 2026-09-10 — and require ``cross``. Any other value (missing, empty,
+        or a level OKX adds later) raises: an unrecognised account is a reason
+        to **not send the order**, never a reason to fall back to ``cash``.
+        """
+        if self._acct_level is None:
+            await self.fetch_account_config()
+        level = self._acct_level
+        if level in ("1", "2"):
+            return "cash"
+        if level in ("3", "4"):
+            return "cross"
+        raise ExchangeError(
+            f"okx: cannot decide spot tdMode — account level (acctLv) is {level!r}. "
+            "Measure it with fetch_account_config(); pycex will not guess 'cash'.",
+            code="acctLv",
+            exchange="okx",
+        )
+
+    async def fetch_available_balance(self, asset: str) -> float:
+        """``GET /api/v5/account/balance?ccy=<asset>`` -> that currency's ``availBal``.
+
+        ``availBal`` is the settled, tradable figure — deliberately **not**
+        ``cashBal``/``eq``, which still count a fill that has not settled and
+        would walk straight back into ``51008``. Unknown currency -> ``0.0``;
+        a failed query raises rather than reporting a comfortable zero.
+        """
+        path = "/api/v5/account/balance"
+        params = {"ccy": asset.upper()}
+        full_path = f"{path}?{urlencode(params)}"
+        data = await self._http.get(path, params=params, headers=self._auth_headers("GET", full_path))
+        result = self._check(data)
+        for account in result:
+            for detail in account.get("details", []):
+                if str(detail.get("ccy", "")).upper() == asset.upper():
+                    return float(detail.get("availBal", 0) or 0)
+        return 0.0
+
     async def fetch_positions(self, symbols: list[str] | None = None) -> list[Position]:
         if self.market_type != "linear":
             return await super().fetch_positions(symbols)
@@ -287,21 +364,111 @@ class OKX(BaseExchange):
         result = self._check(data)
         return _parse_funding(symbol, result[0] if result else {})
 
+    async def set_leverage(self, symbol: str, lever: float, mgn_mode: str = "cross") -> dict[str, Any]:
+        """``POST /api/v5/account/set-leverage`` for one SWAP instrument.
+
+        Rejects — before the request goes out — what OKX cannot accept: a spot
+        adapter, a margin mode other than ``cross``/``isolated``, and a
+        non-positive/non-finite leverage. It does **not** cap the value.
+        """
+        if self.market_type != "linear":
+            raise NotSupportedError("okx: leverage applies to SWAP (market_type='linear') only")
+        if mgn_mode not in ("cross", "isolated"):
+            raise InvalidOrderError(
+                f"okx: mgn_mode must be 'cross' or 'isolated', got {mgn_mode!r}", code="mgnMode", exchange="okx"
+            )
+        if not math.isfinite(lever) or lever <= 0:
+            raise InvalidOrderError(
+                f"okx: lever must be a finite positive number, got {lever!r}", code="lever", exchange="okx"
+            )
+        path = "/api/v5/account/set-leverage"
+        body = {"instId": self.to_native(symbol), "lever": _num(lever), "mgnMode": mgn_mode}
+        body_str = json.dumps(body)
+        data = await self._http.post_raw(path, body=body_str, headers=self._auth_headers("POST", path, body_str))
+        result = self._check(data)
+        row: dict[str, Any] = result[0] if result else {}
+        return row
+
     # ── Trading ──
 
     async def create_order(
-        self, symbol: str, side: str, order_type: str, amount: float, price: float | None = None
+        self,
+        symbol: str,
+        side: str,
+        order_type: str,
+        amount: float,
+        price: float | None = None,
+        *,
+        client_order_id: str | None = None,
+        reduce_only: bool = False,
+        tgt_ccy: str | None = None,
+        tp_px: float | None = None,
+        sl_px: float | None = None,
     ) -> Order:
+        """Place an order.
+
+        ``client_order_id`` is OKX's ``clOrdId`` — the venue-level idempotency
+        key. pycex sends what it is given and **never generates one**: whether
+        a retry reuses a key or mints a new one is the caller's policy, not the
+        SDK's. OKX accepts 1-32 alphanumeric characters; anything else is
+        rejected here, before the request goes out.
+
+        ``reduce_only`` (SWAP only) marks an order that may only shrink an open
+        position. ``tp_px``/``sl_px`` attach a take-profit / stop-loss to the
+        order (``attachAlgoOrds``, both triggering a market exit).
+
+        ``tgt_ccy`` names the unit of ``amount`` on a **spot market** order:
+        ``"quote_ccy"`` (spend N USDT) or ``"base_ccy"`` (trade N BTC). It is
+        always sent on such orders — defaulting to ``quote_ccy`` for a buy and
+        ``base_ccy`` for a sell — rather than left to OKX's own default, which
+        would silently turn "10 USDT worth" into "10 BTC" if the venue ever
+        changed it. Every other order shape rejects it: on a limit order OKX
+        ignores it, and a silently ignored parameter is worse than an error.
+        """
         path = "/api/v5/trade/order"
         native = self.to_native(symbol)
+        td_mode = self._td_mode if self.market_type == "linear" else await self._spot_td_mode()
         body: dict[str, Any] = {
             "instId": native,
-            # SWAP requires cross/isolated margin mode; SPOT is always "cash".
-            "tdMode": self._td_mode if self.market_type == "linear" else "cash",
+            # SWAP takes the configured cross/isolated margin mode; SPOT's mode
+            # depends on the account level — see _spot_td_mode (A-3).
+            "tdMode": td_mode,
             "side": side.lower(),
             "ordType": "limit" if order_type.lower() == "limit" else "market",
             "sz": str(amount),
         }
+        if client_order_id is not None:
+            body["clOrdId"] = _validated_client_order_id(client_order_id)
+        is_spot_market = self.market_type == "spot" and body["ordType"] == "market"
+        if tgt_ccy is not None:
+            if not is_spot_market:
+                raise InvalidOrderError(
+                    "okx: tgt_ccy applies to spot market orders only "
+                    f"(market_type={self.market_type!r}, ordType={body['ordType']!r})",
+                    code="tgtCcy",
+                    exchange="okx",
+                )
+            if tgt_ccy not in ("base_ccy", "quote_ccy"):
+                raise InvalidOrderError(
+                    f"okx: tgt_ccy must be 'base_ccy' or 'quote_ccy', got {tgt_ccy!r}",
+                    code="tgtCcy",
+                    exchange="okx",
+                )
+            body["tgtCcy"] = tgt_ccy
+        elif is_spot_market:
+            body["tgtCcy"] = "quote_ccy" if body["side"] == "buy" else "base_ccy"
+        if reduce_only:
+            if self.market_type != "linear":
+                raise InvalidOrderError(
+                    "okx: reduce_only applies to SWAP (market_type='linear') only — "
+                    "a spot balance has no position to reduce",
+                    code="reduceOnly",
+                    exchange="okx",
+                )
+            body["reduceOnly"] = "true"
+        algo = _attached_algo_orders(tp_px, sl_px)
+        if algo is not None:
+            body["attachAlgoOrds"] = [algo]
         if OKX_BROKER_ID:
             body["tag"] = OKX_BROKER_ID
         if price is not None:
@@ -311,11 +478,10 @@ class OKX(BaseExchange):
         # posSide="long"/"short" on every order — see module docstring.
         body_str = json.dumps(body)
         data = await self._http.post_raw(path, body=body_str, headers=self._auth_headers("POST", path, body_str))
-        result = self._check(data)
-        r = result[0] if result else {}
-        _raise_on_scode(r)
+        r = _check_order_response(data)
         return Order(
             id=r.get("ordId", ""),
+            client_order_id=r.get("clOrdId") or client_order_id or None,
             symbol=symbol,
             side=side.lower(),
             type=order_type.lower(),
@@ -330,10 +496,16 @@ class OKX(BaseExchange):
         body = {"instId": native, "ordId": order_id}
         body_str = json.dumps(body)
         data = await self._http.post_raw(path, body=body_str, headers=self._auth_headers("POST", path, body_str))
-        result = self._check(data)
-        r = result[0] if result else {}
-        _raise_on_scode(r)
-        return Order(id=r.get("ordId", order_id), symbol=symbol, side="", type="", amount=0, raw=data)
+        r = _check_order_response(data)
+        return Order(
+            id=r.get("ordId", order_id),
+            client_order_id=r.get("clOrdId") or None,
+            symbol=symbol,
+            side="",
+            type="",
+            amount=0,
+            raw=data,
+        )
 
     async def fetch_order(self, order_id: str, symbol: str) -> Order:
         native = self.to_native(symbol)
@@ -495,13 +667,27 @@ def _none_if_zero(v: Any) -> float | None:
 
 
 def _parse_position(symbol: str, d: dict[str, Any]) -> Position:
+    """Parse one ``GET /api/v5/account/positions`` row.
+
+    Net mode reports direction in the sign of ``pos``; hedge mode reports a
+    positive ``pos`` and puts the direction in ``posSide``. Either way the
+    parsed ``amount`` is absolute and ``side`` carries the direction. A zero
+    position is ``"flat"`` — not a guessed direction.
+    """
     pos = float(d.get("pos", 0) or 0)
     pos_side = d.get("posSide", "net")
-    side = ("long" if pos > 0 else "short") if pos_side == "net" else pos_side
+    if pos_side in ("long", "short"):
+        side = str(pos_side)
+    elif pos == 0:
+        side = "flat"
+    else:
+        side = "long" if pos > 0 else "short"
+    mgn_mode = d.get("mgnMode")
     return Position(
         symbol=symbol,
         side=side,
         amount=abs(pos),
+        margin_mode=str(mgn_mode) if mgn_mode else None,
         entry_price=_none_if_zero(d.get("avgPx")),
         unrealized_pnl=float(d.get("upl", 0) or 0),
         leverage=_none_if_zero(d.get("lever")),
@@ -540,6 +726,7 @@ def _parse_my_trade(symbol: str, t: dict[str, Any]) -> MyTrade:
 def _parse_order(symbol: str, d: dict[str, Any]) -> Order:
     return Order(
         id=d.get("ordId", ""),
+        client_order_id=d.get("clOrdId") or None,
         symbol=symbol,
         side=d.get("side", "").lower(),
         type=d.get("ordType", "").lower(),
@@ -559,7 +746,8 @@ def _map_error(code: str, msg: str) -> PyCexError:
     """Map OKX's ``code``/``msg`` pair (present both on HTTP>=400 bodies and on
     HTTP 200 responses with ``code != "0"``) to a ``PyCexError``."""
     if code == "51008":
-        return InsufficientBalanceError(msg, code=code, exchange="okx")
+        # Not "you are broke" — "not settled yet". See SettlementPendingError.
+        return SettlementPendingError(msg, code=code, exchange="okx")
     if code in ("50111", "50113", "50114"):
         return AuthenticationError(msg)
     if code == "51603":
@@ -574,6 +762,87 @@ def _error_mapper(status: int, data: dict[str, Any]) -> PyCexError | None:
     if code is None:
         return None
     return _map_error(str(code), str(data.get("msg", "Unknown error")))
+
+
+def _attached_algo_orders(tp_px: float | None, sl_px: float | None) -> dict[str, str] | None:
+    """Build OKX's ``attachAlgoOrds`` entry for an attached TP/SL.
+
+    ``tpOrdPx``/``slOrdPx`` of ``"-1"`` means "exit at market when triggered".
+    A non-positive or non-finite trigger is refused rather than sent: it would
+    be rejected or silently ignored, and either way the caller would believe a
+    stop was in place.
+    """
+    algo: dict[str, str] = {}
+    for label, px, trigger_key, order_key in (
+        ("tp_px", tp_px, "tpTriggerPx", "tpOrdPx"),
+        ("sl_px", sl_px, "slTriggerPx", "slOrdPx"),
+    ):
+        if px is None:
+            continue
+        if not math.isfinite(px) or px <= 0:
+            raise InvalidOrderError(
+                f"okx: {label} must be a finite positive price, got {px!r}", code=label, exchange="okx"
+            )
+        algo[trigger_key] = _num(px)
+        algo[order_key] = "-1"
+    return algo or None
+
+
+def _num(value: float) -> str:
+    """Render a number in OKX's canonical string form: ``3.0`` -> ``"3"``.
+
+    Measured, so it is not overstated: the 2026-09-10 ledger shows the harness
+    sending ``lever: "3.0"`` and OKX accepting it (``code 0``, echoing
+    ``"3.0"``). So this is normalisation, not a rejection being avoided — it
+    keeps ``lever``, trigger prices and sizes in one shape instead of letting
+    Python float repr decide. Fractional values keep their digits.
+    """
+    return str(int(value)) if float(value).is_integer() else str(value)
+
+
+#: OKX ``clOrdId``: 1-32 alphanumeric characters (letters and digits only).
+_CLIENT_ORDER_ID_RE = re.compile(r"^[A-Za-z0-9]{1,32}$")
+
+
+def _validated_client_order_id(value: str) -> str:
+    """Reject a ``clOrdId`` OKX would refuse — here, not on the wire.
+
+    Sending a malformed key and reading the rejection back is not "validation":
+    the order did not go out, the caller cannot tell that apart from a venue
+    outage, and an empty string silently turns idempotency **off**.
+    """
+    if not _CLIENT_ORDER_ID_RE.match(value):
+        raise InvalidOrderError(
+            f"okx: client_order_id must be 1-32 alphanumeric characters, got {value!r}",
+            code="client_order_id",
+            exchange="okx",
+        )
+    return value
+
+
+def _check_order_response(data: dict[str, Any]) -> dict[str, Any]:
+    """Return ``data[0]`` of an order/cancel response, raising the **per-item**
+    rejection when there is one.
+
+    🚨 Live wire shape (2026-09-10 ledger, 32 rejected orders): a rejected order
+    comes back HTTP 200 with top-level ``code == "1"`` and an empty top-level
+    ``msg``; the reason lives in ``data[0].sCode``/``sMsg`` (``51000 Parameter
+    tdMode error``, ``51008 ...``). Reading the top-level code first — as
+    ``_check`` does — throws away the only informative field and reports every
+    rejection as the meaningless code ``"1"``.
+    """
+    rows = data.get("data") or []
+    row: dict[str, Any] = rows[0] if rows else {}
+    if row:
+        _raise_on_scode(row)
+    _check_data_code(data)
+    return row
+
+
+def _check_data_code(data: dict[str, Any]) -> None:
+    code = str(data.get("code", "0"))
+    if code != "0":
+        raise _map_error(code, str(data.get("msg", "") or "Unknown error"))
 
 
 def _raise_on_scode(item: dict[str, Any]) -> None:

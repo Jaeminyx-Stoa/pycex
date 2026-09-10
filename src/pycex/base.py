@@ -31,7 +31,25 @@ _SYNC_TARGETS = (
     "fetch_my_trades",
     "fetch_positions",
     "fetch_funding_rate",
+    "set_leverage",
+    "fetch_available_balance",
 )
+
+
+async def _call_and_release(self: BaseExchange, name: str, a: tuple[Any, ...], kw: dict[str, Any]) -> Any:
+    """Run one async call and hand the connection pool back before the loop dies.
+
+    ``asyncio.run`` closes the loop it created. A pool left open across that
+    boundary is unusable — every later request against it raises
+    ``RuntimeError: Event loop is closed`` — so the twin releases it here and
+    ``HTTPClient._bind`` builds a fresh one on the next call.
+    """
+    try:
+        return await getattr(self, name)(*a, **kw)
+    finally:
+        http = getattr(self, "_http", None)
+        if http is not None:
+            await http.close()
 
 
 def _make_sync(name: str) -> Callable[..., Any]:
@@ -39,7 +57,7 @@ def _make_sync(name: str) -> Callable[..., Any]:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(getattr(self, name)(*a, **kw))
+            return asyncio.run(_call_and_release(self, name, a, kw))
         raise RuntimeError(f"{name}_sync called inside a running event loop; await {name}() instead")
 
     _sync.__name__ = f"{name}_sync"
@@ -103,6 +121,10 @@ class BaseExchange(ABC):
         ) -> list[MyTrade]: ...
         def fetch_positions_sync(self, symbols: list[str] | None = None) -> list[Position]: ...
         def fetch_funding_rate_sync(self, symbol: str) -> FundingRate: ...
+        def set_leverage_sync(
+            self, symbol: str, lever: float, mgn_mode: str = "cross"
+        ) -> dict[str, Any]: ...
+        def fetch_available_balance_sync(self, asset: str) -> float: ...
 
     def __init_subclass__(cls, **kw: Any) -> None:
         super().__init_subclass__(**kw)
@@ -267,11 +289,48 @@ class BaseExchange(ABC):
     @abstractmethod
     async def fetch_balance(self) -> Balance: ...
 
+    async def fetch_available_balance(self, asset: str) -> float:
+        """How much of ``asset`` is **available to trade right now**, measured.
+
+        🚨 This is the only honest answer to "has my last fill settled yet".
+        A sell placed against a balance that has not settled comes back
+        rejected — OKX ``51008``, which held a live sell off for ~70 seconds on
+        2026-09-10 — and the way through is to ask the venue again, not to
+        retry blindly against a local ledger.
+
+        Therefore: every call re-measures, nothing is cached, and there is no
+        retry loop here. Waiting is the caller's policy (see the settlement-
+        aware execution loop, P-1).
+
+        🚨 **This base implementation answers with `Balance.free`, which is only
+        as honest as the venue's own balance endpoint.** OKX overrides it with
+        the per-currency `availBal` field, which is what was actually measured
+        against a live account. On every other exchange here (Binance, Bybit,
+        Bitget, Upbit, Bithumb, Korbit) `free` is whatever that venue's balance
+        call reports, and **nothing verifies that it excludes unsettled
+        proceeds**. Do not treat it as a settlement guarantee before someone has
+        measured that venue the way OKX was measured; until then, a caller who
+        needs "has it settled" must confirm it against the venue itself.
+        """
+        balance = await self.fetch_balance()
+        entry = balance.get(asset)
+        return entry.free if entry else 0.0
+
     async def fetch_positions(self, symbols: list[str] | None = None) -> list[Position]:
         raise NotSupportedError(f"{self.name}:{self.market_type} has no positions")
 
     async def fetch_funding_rate(self, symbol: str) -> FundingRate:
         raise NotSupportedError(f"{self.name}:{self.market_type} has no funding rate")
+
+    async def set_leverage(self, symbol: str, lever: float, mgn_mode: str = "cross") -> dict[str, Any]:
+        """Set the leverage of one derivatives instrument. Returns the venue's row.
+
+        Spot markets have no leverage, so the default raises. **No risk policy
+        lives here**: a leverage cap belongs to the caller's order-budget gate,
+        and a silent ceiling inside the SDK would make a caller believe its own
+        cap was doing the work.
+        """
+        raise NotSupportedError(f"{self.name}:{self.market_type} has no leverage")
 
     # ── Trading ──
 
