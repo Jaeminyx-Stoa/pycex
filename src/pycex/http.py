@@ -17,16 +17,34 @@ logger = logging.getLogger("pycex")
 
 
 class RateLimiter:
-    """Simple token bucket rate limiter."""
+    """Simple token bucket rate limiter.
+
+    The bucket belongs to the caller's *whole* session, not to one event loop.
+    Only the ``asyncio.Lock`` is loop-bound, so that — and nothing else — is
+    rebuilt when the running loop changes; ``_tokens``/``_last`` carry over.
+    Rebuilding the limiter instead hands every ``*_sync`` call a full bucket,
+    which is the same as having no rate limit at all (A2-2).
+    """
 
     def __init__(self, rate: float) -> None:
         self._rate = rate
         self._tokens = rate
         self._last = time.monotonic()
         self._lock = asyncio.Lock()
+        self._lock_loop: asyncio.AbstractEventLoop | None = None
+
+    def _loop_lock(self) -> asyncio.Lock:
+        """The lock for the loop running right now. ``asyncio.Lock`` binds to a
+        loop the first time it is contended and refuses another one, so a new
+        loop gets a new lock — the token budget above it does not move."""
+        loop = asyncio.get_running_loop()
+        if self._lock_loop is not loop:
+            self._lock = asyncio.Lock()
+            self._lock_loop = loop
+        return self._lock
 
     async def acquire(self) -> None:
-        async with self._lock:
+        async with self._loop_lock():
             now = time.monotonic()
             elapsed = now - self._last
             self._tokens = min(self._rate, self._tokens + elapsed * self._rate)
@@ -122,8 +140,8 @@ class HTTPClient:
         """Return a client owned by the loop that is running **right now**.
 
         Rebuilds when the loop changed under us or the current client was
-        closed; the rate limiter is rebuilt with it because ``asyncio.Lock``
-        binds to a loop on first contention.
+        closed. The rate limiter is **not** rebuilt with it — the token budget
+        belongs to this ``HTTPClient``, not to one loop (A2-2).
         """
         loop = asyncio.get_running_loop()
         client = self._client_obj
@@ -133,7 +151,6 @@ class HTTPClient:
             if hooks:
                 client.event_hooks = hooks
             self._client_obj = client
-            self._limiter = RateLimiter(self._rate)
         self._client_loop = loop
         return client
 
