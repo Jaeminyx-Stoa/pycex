@@ -5,7 +5,7 @@ from pycex import Binance
 # No API key needed for public market data
 with Binance() as ex:
     # Fetch current ticker
-    ticker = ex.fetch_ticker_sync("BTCUSDT")
+    ticker = ex.fetch_ticker_sync("BTC/USDT")
     print(f"BTC/USDT on {ex.name}")
     print(f"  Last price : ${ticker.last:,.2f}")
     print(f"  Bid        : ${ticker.bid:,.2f}")
@@ -20,7 +20,7 @@ with Binance() as ex:
     print()
 
     # Fetch order book (top 10 levels)
-    ob = ex.fetch_order_book_sync("BTCUSDT", limit=10)
+    ob = ex.fetch_order_book_sync("BTC/USDT", limit=10)
     print(f"Order Book: {ob.symbol}")
     print("  Asks (sell orders):")
     for ask in reversed(ob.asks[:5]):
@@ -31,5 +31,5 @@ with Binance() as ex:
         print(f"    ${bid.price:>12,.2f}  x  {bid.amount:,.6f} BTC")
 
     # Fetch ETH ticker too
-    eth = ex.fetch_ticker_sync("ETHUSDT")
+    eth = ex.fetch_ticker_sync("ETH/USDT")
     print(f"\nETH/USDT: ${eth.last:,.2f}")

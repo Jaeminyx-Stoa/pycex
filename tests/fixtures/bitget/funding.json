@@ -1,0 +1,15 @@
+{
+  "code": "00000",
+  "msg": "success",
+  "requestTime": 1788084754124,
+  "data": [
+    {
+      "symbol": "BTCUSDT",
+      "fundingRate": "0.000068",
+      "fundingRateInterval": "8",
+      "nextUpdate": "1788105600000",
+      "minFundingRate": "-0.003",
+      "maxFundingRate": "0.003"
+    }
+  ]
+}

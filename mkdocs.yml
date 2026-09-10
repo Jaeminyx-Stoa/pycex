@@ -1,5 +1,5 @@
 site_name: pycex
-site_description: Unified Python wrapper for cryptocurrency exchanges (Binance, Bybit, OKX)
+site_description: Unified Python wrapper for cryptocurrency exchanges (Binance, Bybit, OKX, Bitget, Upbit, Bithumb, Korbit)
 site_url: https://jaeminyx-stoa.github.io/pycex/
 repo_url: https://github.com/Jaeminyx-Stoa/pycex
 repo_name: Jaeminyx-Stoa/pycex
@@ -45,4 +45,5 @@ nav:
       - Models: api/models.md
   - MCP Server: mcp.md
   - CLI: cli.md
+  - Migrating to 0.2: migration-0.2.md
   - Changelog: changelog.md

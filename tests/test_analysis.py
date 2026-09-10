@@ -5,10 +5,7 @@ from pycex.models.candle import Candle
 
 
 def _candles(closes: list[float]) -> list[Candle]:
-    return [
-        Candle(timestamp=i, open=c, high=c + 1, low=c - 1, close=c, volume=100)
-        for i, c in enumerate(closes)
-    ]
+    return [Candle(timestamp=i, open=c, high=c + 1, low=c - 1, close=c, volume=100) for i, c in enumerate(closes)]
 
 
 class TestSMA:

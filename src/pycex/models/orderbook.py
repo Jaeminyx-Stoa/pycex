@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel
 
 
@@ -19,4 +21,4 @@ class OrderBook(BaseModel):
     bids: list[OrderBookEntry]
     asks: list[OrderBookEntry]
     timestamp: int = 0
-    raw: dict = {}  # noqa: RUF012
+    raw: dict[str, Any] = {}  # noqa: RUF012

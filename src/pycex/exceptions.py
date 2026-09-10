@@ -23,6 +23,8 @@ class ExchangeError(PyCexError):
 class RateLimitError(ExchangeError):
     """Request was rate-limited by the exchange."""
 
+    retry_after: float | None = None
+
 
 class InsufficientBalanceError(ExchangeError):
     """Insufficient funds for the requested operation."""
@@ -42,3 +44,7 @@ class NetworkError(PyCexError):
 
 class SymbolNotFoundError(PyCexError):
     """Trading pair/symbol does not exist on the exchange."""
+
+
+class NotSupportedError(PyCexError):
+    """The exchange or market type does not support this operation."""

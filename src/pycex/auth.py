@@ -5,7 +5,10 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import time
+import uuid
+from typing import Any
 from urllib.parse import urlencode
 
 
@@ -20,7 +23,7 @@ def timestamp_ms() -> int:
 # ── Binance ──
 
 
-def binance_sign(secret: str, params: dict) -> dict:
+def binance_sign(secret: str, params: dict[str, Any]) -> dict[str, Any]:
     """Add signature to Binance request params."""
     params["timestamp"] = timestamp_ms()
     query = urlencode(params)
@@ -110,3 +113,64 @@ def bitget_headers(
     if demo:
         headers["paptrading"] = "1"
     return headers
+
+
+# ── Upbit ──
+
+
+def _b64url(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+
+
+def jwt_hs256(secret: str, payload: dict[str, Any]) -> str:
+    """Encode a minimal HS256 JWT: base64url(header).base64url(payload).base64url(signature)."""
+    header = _b64url(json.dumps({"alg": "HS256", "typ": "JWT"}, separators=(",", ":")).encode())
+    body = _b64url(json.dumps(payload, separators=(",", ":")).encode())
+    sig = _b64url(hmac.new(secret.encode(), f"{header}.{body}".encode(), hashlib.sha256).digest())
+    return f"{header}.{body}.{sig}"
+
+
+def upbit_headers(api_key: str, secret: str, params: dict[str, Any] | None = None) -> dict[str, str]:
+    """Build Upbit JWT authentication headers.
+
+    ``params`` is the exact query (or body treated as a query) sent with the
+    request; when present its urlencoded form is SHA-512 hashed into
+    ``query_hash`` per Upbit's spec. Requests with no params omit the hash.
+    """
+    payload: dict[str, Any] = {"access_key": api_key, "nonce": str(uuid.uuid4())}
+    if params:
+        payload["query_hash"] = hashlib.sha512(urlencode(params, doseq=True).encode()).hexdigest()
+        payload["query_hash_alg"] = "SHA512"
+    return {"Authorization": f"Bearer {jwt_hs256(secret, payload)}"}
+
+
+# ── Bithumb ──
+
+
+def korbit_sign(secret: str, message: str) -> str:
+    """HMAC-SHA256 hex signature for Korbit v2's param-based auth.
+
+    Korbit has no signature/timestamp *headers* — ``timestamp`` and
+    ``signature`` travel as ordinary request parameters (query for GET/DELETE,
+    ``application/x-www-form-urlencoded`` body for POST). ``message`` must be
+    exactly the encoded query string or body that will be sent, with
+    ``signature`` itself excluded (per docs.korbit.co.kr/llms/en/rest_api.md,
+    e.g. ``timestamp=1719232467910symbol=btc_krw``).
+    """
+    return hmac_sha256(secret, message)
+
+
+def bithumb_headers(api_key: str, secret: str, params: dict[str, Any] | None = None) -> dict[str, str]:
+    """Build Bithumb JWT authentication headers.
+
+    Same shape as :func:`upbit_headers` (JWT HS256, ``query_hash``/``query_hash_alg``
+    when ``params`` is given), but Bithumb requires an explicit ``timestamp``
+    (Unix **milliseconds**) field in every payload regardless of whether the
+    request carries params — this is the one field Upbit's payload omits. See
+    https://apidocs.bithumb.com/docs/인증-토큰-생성하기.
+    """
+    payload: dict[str, Any] = {"access_key": api_key, "nonce": str(uuid.uuid4()), "timestamp": timestamp_ms()}
+    if params:
+        payload["query_hash"] = hashlib.sha512(urlencode(params, doseq=True).encode()).hexdigest()
+        payload["query_hash_alg"] = "SHA512"
+    return {"Authorization": f"Bearer {jwt_hs256(secret, payload)}"}

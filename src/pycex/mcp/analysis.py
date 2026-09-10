@@ -53,7 +53,7 @@ def volatility(candles: list[Candle]) -> float | None:
     return statistics.stdev(returns) if len(returns) > 1 else 0.0
 
 
-def bollinger_bands(candles: list[Candle], period: int = 20, num_std: float = 2.0) -> dict | None:
+def bollinger_bands(candles: list[Candle], period: int = 20, num_std: float = 2.0) -> dict[str, float] | None:
     closes = [c.close for c in candles]
     if len(closes) < period:
         return None
@@ -68,7 +68,7 @@ def bollinger_bands(candles: list[Candle], period: int = 20, num_std: float = 2.
     }
 
 
-def support_resistance(candles: list[Candle], lookback: int = 20) -> dict:
+def support_resistance(candles: list[Candle], lookback: int = 20) -> dict[str, float]:
     recent = candles[-lookback:] if len(candles) >= lookback else candles
     highs = [c.high for c in recent]
     lows = [c.low for c in recent]

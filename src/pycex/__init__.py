@@ -5,13 +5,16 @@ from pycex.constants import (
     BINANCE_BASE,
     BINANCE_TESTNET,
     BITGET_BASE,
+    BITHUMB_BASE,
     BUY,
     BYBIT_BASE,
     BYBIT_TESTNET,
+    KORBIT_BASE,
     LIMIT,
     MARKET,
     OKX_BASE,
     SELL,
+    UPBIT_BASE,
 )
 from pycex.exceptions import (
     AuthenticationError,
@@ -19,26 +22,49 @@ from pycex.exceptions import (
     InsufficientBalanceError,
     InvalidOrderError,
     NetworkError,
+    NotSupportedError,
     OrderNotFoundError,
     PyCexError,
     RateLimitError,
     SymbolNotFoundError,
 )
-from pycex.exchanges import OKX, Binance, Bitget, Bybit
+from pycex.exchanges import OKX, Binance, Bitget, Bithumb, Bybit, Korbit, Upbit
+from pycex.factory import create_exchange
+from pycex.models import (
+    Balance,
+    BalanceEntry,
+    Candle,
+    FundingRate,
+    Market,
+    MyTrade,
+    Order,
+    OrderBook,
+    OrderBookEntry,
+    Position,
+    Ticker,
+    Trade,
+)
+from pycex.symbols import parse_symbol
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = [
     "BaseExchange",
     "Binance",
     "Bitget",
+    "Bithumb",
     "Bybit",
+    "Korbit",
     "OKX",
+    "Upbit",
     "BINANCE_BASE",
     "BINANCE_TESTNET",
     "BITGET_BASE",
+    "BITHUMB_BASE",
     "BYBIT_BASE",
     "BYBIT_TESTNET",
+    "KORBIT_BASE",
     "OKX_BASE",
+    "UPBIT_BASE",
     "BUY",
     "SELL",
     "LIMIT",
@@ -52,4 +78,19 @@ __all__ = [
     "OrderNotFoundError",
     "NetworkError",
     "SymbolNotFoundError",
+    "NotSupportedError",
+    "Balance",
+    "BalanceEntry",
+    "Candle",
+    "FundingRate",
+    "Market",
+    "MyTrade",
+    "Order",
+    "OrderBook",
+    "OrderBookEntry",
+    "Position",
+    "Ticker",
+    "Trade",
+    "create_exchange",
+    "parse_symbol",
 ]

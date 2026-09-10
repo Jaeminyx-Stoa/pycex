@@ -6,28 +6,43 @@ import argparse
 import json
 import os
 import sys
+import warnings
 
 from pycex.base import BaseExchange
+from pycex.exceptions import PyCexError
+from pycex.factory import EXCHANGES, create_exchange
+from pycex.symbols import MarketType
 
 
 def _make_exchange(args: argparse.Namespace) -> BaseExchange:
-    from pycex import OKX, Binance, Bybit
-
     exchange_name = args.exchange or os.environ.get("PYCEX_EXCHANGE", "binance")
     api_key = args.api_key or os.environ.get("PYCEX_API_KEY", "")
     secret = args.secret or os.environ.get("PYCEX_SECRET", "")
-    testnet = args.testnet
+    passphrase = os.environ.get("PYCEX_PASSPHRASE", "")
 
-    exchange_name = exchange_name.lower()
-    if exchange_name == "binance":
-        return Binance(api_key=api_key, secret=secret, testnet=testnet)
-    elif exchange_name == "bybit":
-        return Bybit(api_key=api_key, secret=secret, testnet=testnet)
-    elif exchange_name == "okx":
-        passphrase = os.environ.get("PYCEX_PASSPHRASE", "")
-        return OKX(api_key=api_key, secret=secret, passphrase=passphrase, demo=testnet)
-    else:
-        print(f"Unknown exchange: {exchange_name}", file=sys.stderr)
+    sandbox = bool(getattr(args, "sandbox", False))
+    if getattr(args, "testnet", False):
+        warnings.warn("--testnet is deprecated; use --sandbox", DeprecationWarning, stacklevel=2)
+        sandbox = True
+    market_type_raw = getattr(args, "market_type", None) or "spot"
+    market_type: MarketType = "linear" if market_type_raw == "linear" else "spot"
+
+    try:
+        return create_exchange(
+            exchange_name,
+            api_key=api_key,
+            secret=secret,
+            passphrase=passphrase,
+            sandbox=sandbox,
+            market_type=market_type,
+        )
+    except (ValueError, PyCexError) as e:
+        # ValueError: unknown exchange name (raised by create_exchange itself).
+        # PyCexError: an adapter's own constructor rejecting the combination,
+        # e.g. NotSupportedError("upbit has no sandbox environment") — both
+        # are user input errors, not bugs, so exit clean with the message
+        # instead of a traceback.
+        print(str(e), file=sys.stderr)
         sys.exit(1)
 
 
@@ -111,16 +126,20 @@ def cmd_sell(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="pycex", description="Unified crypto exchange CLI")
-    parser.add_argument("--exchange", "-e", help="Exchange: binance, bybit, okx")
+    parser.add_argument("--exchange", "-e", help=f"Exchange: {', '.join(sorted(EXCHANGES))}")
     parser.add_argument("--api-key", help="API key")
     parser.add_argument("--secret", help="API secret")
-    parser.add_argument("--testnet", action="store_true", help="Use testnet")
+    parser.add_argument("--sandbox", action="store_true", help="Use sandbox/testnet/demo mode")
+    parser.add_argument("--testnet", action="store_true", help="[deprecated] use --sandbox instead")
+    parser.add_argument(
+        "--market-type", dest="market_type", choices=["spot", "linear"], default="spot", help="Market type"
+    )
     parser.add_argument("--json", action="store_true", help="JSON output")
 
     sub = parser.add_subparsers(dest="command")
 
     p_ticker = sub.add_parser("ticker", help="Get ticker")
-    p_ticker.add_argument("symbol", help="Trading pair (e.g., BTCUSDT)")
+    p_ticker.add_argument("symbol", help="Canonical pair, BASE/QUOTE or BASE/QUOTE:SETTLE (e.g. BTC/USDT)")
     p_ticker.set_defaults(func=cmd_ticker)
 
     p_ob = sub.add_parser("orderbook", help="Get order book")

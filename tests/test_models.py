@@ -1,6 +1,20 @@
 """Tests for unified Pydantic models."""
 
-from pycex.models import Balance, BalanceEntry, Candle, Order, OrderBook, OrderBookEntry, Ticker, Trade
+from pycex.exceptions import NotSupportedError, PyCexError
+from pycex.models import (
+    Balance,
+    BalanceEntry,
+    Candle,
+    FundingRate,
+    Market,
+    MyTrade,
+    Order,
+    OrderBook,
+    OrderBookEntry,
+    Position,
+    Ticker,
+    Trade,
+)
 
 
 class TestTicker:
@@ -71,3 +85,38 @@ class TestTrade:
         t = Trade(id="456", symbol="ETHUSDT", side="sell", price=3000.0, amount=5.0, timestamp=1700000000)
         assert t.side == "sell"
         assert t.amount == 5.0
+
+
+def test_market_defaults() -> None:
+    m = Market(symbol="BTC/KRW", native="KRW-BTC", base="BTC", quote="KRW", market_type="spot")
+    assert m.active and m.price_tick is None
+
+
+def test_mytrade_fee_default() -> None:
+    t = MyTrade(id="1", order_id="o", symbol="BTC/USDT", side="buy", price=1.0, amount=2.0)
+    assert t.fee == 0.0 and t.fee_asset == ""
+
+
+def test_position_flat() -> None:
+    p = Position(symbol="BTC/USDT:USDT", side="flat", amount=0.0)
+    assert p.unrealized_pnl == 0.0
+
+
+def test_funding_rate_interval_default() -> None:
+    f = FundingRate(symbol="BTC/USDT:USDT", rate=0.0001)
+    assert f.interval_hours == 8
+
+
+def test_not_supported_is_pycex_error() -> None:
+    assert issubclass(NotSupportedError, PyCexError)
+
+
+def test_every_model_is_exported_from_the_package_root() -> None:
+    """`from pycex import Candle` was an ImportError: only 4 of the 12 models were
+    re-exported, so callers had to reach into `pycex.models.*` for the rest."""
+    import pycex
+    import pycex.models
+
+    for name in pycex.models.__all__:
+        assert name in pycex.__all__, f"{name} missing from pycex.__all__"
+        assert getattr(pycex, name) is getattr(pycex.models, name)

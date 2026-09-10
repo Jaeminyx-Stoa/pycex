@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "pycex"
-version = "0.1.0"
-description = "Unified Python wrapper for cryptocurrency exchanges (Binance, Bybit, OKX) — typed, async-first, with MCP server"
+version = "0.2.0"
+description = "Unified Python wrapper for cryptocurrency exchanges (Binance, Bybit, OKX, Bitget, Upbit, Bithumb, Korbit) — typed, async-first, with MCP server"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
@@ -14,11 +14,12 @@ authors = [
 ]
 keywords = [
     "crypto", "cryptocurrency", "exchange",
-    "binance", "bybit", "okx",
+    "binance", "bybit", "okx", "bitget", "upbit", "bithumb", "korbit",
     "trading", "bitcoin", "ethereum",
     "api", "api-wrapper", "rest-api",
     "algorithmic-trading", "auto-trading",
     "quant", "quantitative-finance",
+    "perpetual", "futures", "korean-won",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -47,7 +48,7 @@ dev = [
     "mypy>=1.10",
 ]
 mcp = [
-    "mcp[cli]>=1.0.0",
+    "mcp[cli]>=1.0.0,<2",
 ]
 docs = [
     "mkdocs-material>=9.5",
@@ -79,6 +80,16 @@ select = ["E", "F", "I", "UP"]
 python_version = "3.10"
 strict = true
 
+[[tool.mypy.overrides]]
+module = "mcp.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "pycex.mcp.*"
+disable_error_code = ["untyped-decorator"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = ["live: hits real exchange endpoints (network)"]
+addopts = "-m 'not live'"

@@ -1,0 +1,29 @@
+{
+  "success": true,
+  "data": [
+    {
+      "symbol": "algo_krw",
+      "status": "launched",
+      "baseCurrency": "algo",
+      "quoteCurrency": "krw",
+      "minOrderValue": "5000",
+      "maxOrderValue": "1000000000"
+    },
+    {
+      "symbol": "ens_krw",
+      "status": "launched",
+      "baseCurrency": "ens",
+      "quoteCurrency": "krw",
+      "minOrderValue": "5000",
+      "maxOrderValue": "1000000000"
+    },
+    {
+      "symbol": "kda_krw",
+      "status": "stopped",
+      "baseCurrency": "kda",
+      "quoteCurrency": "krw",
+      "minOrderValue": "5000",
+      "maxOrderValue": "1000000000"
+    }
+  ]
+}

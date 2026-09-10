@@ -5,6 +5,8 @@ from __future__ import annotations
 # ── Binance ──
 BINANCE_BASE = "https://api.binance.com"
 BINANCE_TESTNET = "https://testnet.binance.vision"
+BINANCE_FAPI = "https://fapi.binance.com"  # USDT-M perpetual futures (market_type="linear")
+BINANCE_FAPI_TESTNET = "https://testnet.binancefuture.com"
 
 # ── Bybit ──
 BYBIT_BASE = "https://api.bybit.com"
@@ -16,6 +18,27 @@ OKX_DEMO = "https://www.okx.com"  # same host, demo flag in header
 
 # ── Bitget ──
 BITGET_BASE = "https://api.bitget.com"  # same host for live and demo, demo via paptrading header
+
+# ── Upbit ──
+UPBIT_BASE = "https://api.upbit.com"  # no sandbox/demo environment
+
+# ── Bithumb ──
+BITHUMB_BASE = "https://api.bithumb.com"  # no sandbox/demo environment; v1/v2 REST paths coexist
+
+# ── Korbit ──
+KORBIT_BASE = "https://api.korbit.co.kr"  # no sandbox/demo environment
+
+# ── Timeframes ──
+# Canonical timeframe -> bar duration in milliseconds. Single source for every
+# adapter and for BaseExchange's backward-paging anchor.
+TIMEFRAME_MS: dict[str, int] = {
+    "1m": 60_000,
+    "5m": 300_000,
+    "15m": 900_000,
+    "1h": 3_600_000,
+    "4h": 14_400_000,
+    "1d": 86_400_000,
+}
 
 # ── Sides ──
 BUY = "buy"
@@ -32,6 +55,12 @@ BINANCE_BROKER_ID = ""
 BYBIT_REFERRAL_CODE = ""
 OKX_BROKER_ID = ""
 BITGET_BROKER_ID = ""  # X-CHANNEL-API-CODE for API broker rebate
+
+# ── Symbol resolution ──
+# Quote-asset suffixes tried (longest-match-first is not required here since
+# each candidate is checked in this fixed priority order) when an adapter has
+# no markets cache yet to resolve a native symbol back to canonical notation.
+QUOTE_SUFFIXES: tuple[str, ...] = ("USDT", "USDC", "BTC", "ETH", "BNB", "FDUSD", "TRY", "EUR", "KRW")
 
 # ── Timeframes ──
 TIMEFRAME_1m = "1m"
