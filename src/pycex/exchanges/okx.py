@@ -72,12 +72,12 @@ from pycex.constants import OKX_BASE, OKX_BROKER_ID
 from pycex.exceptions import (
     AuthenticationError,
     ExchangeError,
-    InsufficientBalanceError,
     InvalidOrderError,
     NotSupportedError,
     OrderNotFoundError,
     PyCexError,
     RateLimitError,
+    SettlementPendingError,
     SymbolNotFoundError,
 )
 from pycex.http import HTTPClient
@@ -746,7 +746,8 @@ def _map_error(code: str, msg: str) -> PyCexError:
     """Map OKX's ``code``/``msg`` pair (present both on HTTP>=400 bodies and on
     HTTP 200 responses with ``code != "0"``) to a ``PyCexError``."""
     if code == "51008":
-        return InsufficientBalanceError(msg, code=code, exchange="okx")
+        # Not "you are broke" — "not settled yet". See SettlementPendingError.
+        return SettlementPendingError(msg, code=code, exchange="okx")
     if code in ("50111", "50113", "50114"):
         return AuthenticationError(msg)
     if code == "51603":
