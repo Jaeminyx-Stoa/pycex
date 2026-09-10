@@ -21,7 +21,10 @@ from pycex.base import BaseExchange
 def test_base_available_balance_docstring_states_the_limit() -> None:
     doc = inspect.getdoc(BaseExchange.fetch_available_balance) or ""
     assert "OKX" in doc
-    assert "settlement guarantee" in doc
+    # 경고의 알맹이 두 조각 — 「검증된 바 없다」와 「그러니 보장으로 쓰지 마라」.
+    # 한쪽만 남기면 반대 뜻으로 읽히므로 둘 다 요구한다.
+    assert "nothing verifies that it excludes unsettled" in doc
+    assert "Do not treat it as a settlement guarantee" in doc
 
 
 def test_only_okx_measured_availbal_so_only_okx_overrides() -> None:
