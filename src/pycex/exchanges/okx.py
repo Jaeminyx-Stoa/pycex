@@ -648,13 +648,27 @@ def _none_if_zero(v: Any) -> float | None:
 
 
 def _parse_position(symbol: str, d: dict[str, Any]) -> Position:
+    """Parse one ``GET /api/v5/account/positions`` row.
+
+    Net mode reports direction in the sign of ``pos``; hedge mode reports a
+    positive ``pos`` and puts the direction in ``posSide``. Either way the
+    parsed ``amount`` is absolute and ``side`` carries the direction. A zero
+    position is ``"flat"`` — not a guessed direction.
+    """
     pos = float(d.get("pos", 0) or 0)
     pos_side = d.get("posSide", "net")
-    side = ("long" if pos > 0 else "short") if pos_side == "net" else pos_side
+    if pos_side in ("long", "short"):
+        side = str(pos_side)
+    elif pos == 0:
+        side = "flat"
+    else:
+        side = "long" if pos > 0 else "short"
+    mgn_mode = d.get("mgnMode")
     return Position(
         symbol=symbol,
         side=side,
         amount=abs(pos),
+        margin_mode=str(mgn_mode) if mgn_mode else None,
         entry_price=_none_if_zero(d.get("avgPx")),
         unrealized_pnl=float(d.get("upl", 0) or 0),
         leverage=_none_if_zero(d.get("lever")),
