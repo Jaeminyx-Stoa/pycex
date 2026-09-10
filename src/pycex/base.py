@@ -301,6 +301,16 @@ class BaseExchange(ABC):
         Therefore: every call re-measures, nothing is cached, and there is no
         retry loop here. Waiting is the caller's policy (see the settlement-
         aware execution loop, P-1).
+
+        🚨 **This base implementation answers with `Balance.free`, which is only
+        as honest as the venue's own balance endpoint.** OKX overrides it with
+        the per-currency `availBal` field, which is what was actually measured
+        against a live account. On every other exchange here (Binance, Bybit,
+        Bitget, Upbit, Bithumb, Korbit) `free` is whatever that venue's balance
+        call reports, and **nothing verifies that it excludes unsettled
+        proceeds**. Do not treat it as a settlement guarantee before someone has
+        measured that venue the way OKX was measured; until then, a caller who
+        needs "has it settled" must confirm it against the venue itself.
         """
         balance = await self.fetch_balance()
         entry = balance.get(asset)
