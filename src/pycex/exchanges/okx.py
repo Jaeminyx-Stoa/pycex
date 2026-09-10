@@ -61,6 +61,7 @@ canonical symbols or ``*-USD-SWAP`` native symbols raise
 from __future__ import annotations
 
 import json
+import math
 import re
 from typing import Any, Literal
 from urllib.parse import urlencode
@@ -73,6 +74,7 @@ from pycex.exceptions import (
     ExchangeError,
     InsufficientBalanceError,
     InvalidOrderError,
+    NotSupportedError,
     OrderNotFoundError,
     PyCexError,
     RateLimitError,
@@ -342,6 +344,31 @@ class OKX(BaseExchange):
         data = await self._http.get("/api/v5/public/funding-rate", params={"instId": native})
         result = self._check(data)
         return _parse_funding(symbol, result[0] if result else {})
+
+    async def set_leverage(self, symbol: str, lever: float, mgn_mode: str = "cross") -> dict[str, Any]:
+        """``POST /api/v5/account/set-leverage`` for one SWAP instrument.
+
+        Rejects — before the request goes out — what OKX cannot accept: a spot
+        adapter, a margin mode other than ``cross``/``isolated``, and a
+        non-positive/non-finite leverage. It does **not** cap the value.
+        """
+        if self.market_type != "linear":
+            raise NotSupportedError("okx: leverage applies to SWAP (market_type='linear') only")
+        if mgn_mode not in ("cross", "isolated"):
+            raise InvalidOrderError(
+                f"okx: mgn_mode must be 'cross' or 'isolated', got {mgn_mode!r}", code="mgnMode", exchange="okx"
+            )
+        if not math.isfinite(lever) or lever <= 0:
+            raise InvalidOrderError(
+                f"okx: lever must be a finite positive number, got {lever!r}", code="lever", exchange="okx"
+            )
+        path = "/api/v5/account/set-leverage"
+        body = {"instId": self.to_native(symbol), "lever": _num(lever), "mgnMode": mgn_mode}
+        body_str = json.dumps(body)
+        data = await self._http.post_raw(path, body=body_str, headers=self._auth_headers("POST", path, body_str))
+        result = self._check(data)
+        row: dict[str, Any] = result[0] if result else {}
+        return row
 
     # ── Trading ──
 
@@ -655,6 +682,15 @@ def _error_mapper(status: int, data: dict[str, Any]) -> PyCexError | None:
     if code is None:
         return None
     return _map_error(str(code), str(data.get("msg", "Unknown error")))
+
+
+def _num(value: float) -> str:
+    """Render a number the way OKX's string params expect it.
+
+    ``str(3.0)`` is ``"3.0"``, which OKX rejects for ``lever``; an integral
+    value has to go out as ``"3"``. Fractional values keep their digits.
+    """
+    return str(int(value)) if float(value).is_integer() else str(value)
 
 
 #: OKX ``clOrdId``: 1-32 alphanumeric characters (letters and digits only).

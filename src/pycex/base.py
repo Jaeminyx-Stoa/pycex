@@ -31,6 +31,7 @@ _SYNC_TARGETS = (
     "fetch_my_trades",
     "fetch_positions",
     "fetch_funding_rate",
+    "set_leverage",
 )
 
 
@@ -119,6 +120,9 @@ class BaseExchange(ABC):
         ) -> list[MyTrade]: ...
         def fetch_positions_sync(self, symbols: list[str] | None = None) -> list[Position]: ...
         def fetch_funding_rate_sync(self, symbol: str) -> FundingRate: ...
+        def set_leverage_sync(
+            self, symbol: str, lever: float, mgn_mode: str = "cross"
+        ) -> dict[str, Any]: ...
 
     def __init_subclass__(cls, **kw: Any) -> None:
         super().__init_subclass__(**kw)
@@ -288,6 +292,16 @@ class BaseExchange(ABC):
 
     async def fetch_funding_rate(self, symbol: str) -> FundingRate:
         raise NotSupportedError(f"{self.name}:{self.market_type} has no funding rate")
+
+    async def set_leverage(self, symbol: str, lever: float, mgn_mode: str = "cross") -> dict[str, Any]:
+        """Set the leverage of one derivatives instrument. Returns the venue's row.
+
+        Spot markets have no leverage, so the default raises. **No risk policy
+        lives here**: a leverage cap belongs to the caller's order-budget gate,
+        and a silent ceiling inside the SDK would make a caller believe its own
+        cap was doing the work.
+        """
+        raise NotSupportedError(f"{self.name}:{self.market_type} has no leverage")
 
     # ── Trading ──
 
