@@ -155,9 +155,7 @@ def test_injected_transport_is_adopted_not_replaced() -> None:
         seen.append(request.url.path)
 
     ex = OKX()
-    ex._http.set_transport_factory(
-        lambda: httpx.MockTransport(lambda r: httpx.Response(200, json=_TICKER))
-    )
+    ex._http.set_transport_factory(lambda: httpx.MockTransport(lambda r: httpx.Response(200, json=_TICKER)))
     ex._http._client.event_hooks = {"request": [hook]}
 
     async def _run() -> None:

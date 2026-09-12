@@ -40,9 +40,7 @@ def test_only_okx_measured_availbal_so_only_okx_overrides() -> None:
 # ── A2-5 우회 거부 ──
 
 
-@pytest.mark.parametrize(
-    "cls", [Binance, Bitget, Bithumb, Bybit, Korbit, OKX, Upbit], ids=lambda c: c.__name__
-)
+@pytest.mark.parametrize("cls", [Binance, Bitget, Bithumb, Bybit, Korbit, OKX, Upbit], ids=lambda c: c.__name__)
 def test_bypass_1_every_override_must_be_documented(cls: type[BaseExchange]) -> None:
     """우회 ① — 조용한 override 로 base 의 경고를 무력화하지 못한다."""
     own = cls.__dict__.get("fetch_available_balance")
