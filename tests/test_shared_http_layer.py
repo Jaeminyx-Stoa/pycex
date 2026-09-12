@@ -15,6 +15,8 @@ import pytest
 
 from pycex import OKX, Binance, Bitget, Bithumb, Bybit, Korbit, Upbit
 from pycex.base import BaseExchange
+from pycex.ratelimit import ExchangeRateLimiter
+from tests.test_exchange_rate_limiter import FakeClock
 
 ALL_EXCHANGES = [Binance, Bitget, Bithumb, Bybit, Korbit, OKX, Upbit]
 
@@ -61,12 +63,13 @@ def test_binance_rate_limit_budget_carries_across_sync_calls() -> None:
     ex._http.set_transport_factory(
         lambda: httpx.MockTransport(lambda r: httpx.Response(200, json=_BINANCE_TICKER))
     )
-    limiter = ex._http._limiter
+    clock = FakeClock()
+    limiter = ex._rate_limiter = ExchangeRateLimiter("binance", clock=clock, sleep=clock.sleep)
     ex.fetch_ticker_sync("BTC/USDT")
-    after_one = limiter._tokens
+    after_one = limiter._buckets["total"].tokens
     ex.fetch_ticker_sync("BTC/USDT")
-    assert ex._http._limiter is limiter
-    assert limiter._tokens < after_one
+    assert ex._rate_limiter is limiter
+    assert limiter._buckets["total"].tokens == after_one - 2
 
 
 @pytest.mark.parametrize("cls", ALL_EXCHANGES, ids=lambda c: c.__name__)
@@ -85,22 +88,40 @@ def test_every_exchange_keeps_transport_and_budget_across_loops(cls: type[BaseEx
     ex = cls()
     ex._http.set_transport_factory(factory)
     limiter = ex._http._limiter
+    # X8 moves admission before signing into the adapter. Bybit retains the
+    # legacy HTTP limiter; the shared transport lifecycle is unchanged for all.
+    throttle = getattr(ex, "_rate_limiter", None)
+    if throttle is not None:
+        clock = FakeClock()
+        throttle = ExchangeRateLimiter(ex.name, clock=clock, sleep=clock.sleep)
+        ex._rate_limiter = throttle  # type: ignore[attr-defined]
+
+    def budget() -> float:
+        if throttle is None:
+            return limiter._tokens
+        return throttle._buckets["total" if ex.name == "binance" else "query"].tokens
 
     def _one_loop() -> None:
         async def _run() -> None:
-            await ex._http.get("/ping")
+            if throttle is None:
+                await ex._http.get("/ping")
+            else:
+                async with throttle.request("query"):
+                    await ex._http.get("/ping")
             await ex._http.close()
 
         asyncio.run(_run())
 
     _one_loop()
-    after_one = limiter._tokens
+    after_one = budget()
     assert _transport_name(ex) == "MockTransport"
     _one_loop()
     assert _transport_name(ex) == "MockTransport", f"{cls.__name__} 2회차가 실 네트워크로 나갔다"
     assert len(made) == 2, f"{cls.__name__} 재빌드가 팩토리를 부르지 않았다"
     assert ex._http._limiter is limiter, f"{cls.__name__} 리미터가 갈렸다"
-    assert limiter._tokens < after_one, f"{cls.__name__} 예산이 리필됐다"
+    if throttle is not None:
+        assert ex._rate_limiter is throttle  # type: ignore[attr-defined]
+    assert budget() < after_one, f"{cls.__name__} 예산이 리필됐다"
 
 
 # ── 우회 거부 ──

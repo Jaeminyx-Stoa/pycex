@@ -91,6 +91,7 @@ from pycex.models.orderbook import OrderBook, OrderBookEntry
 from pycex.models.position import Position
 from pycex.models.ticker import Ticker
 from pycex.models.trade import Trade
+from pycex.ratelimit import ExchangeRateLimiter
 from pycex.symbols import MarketType, parse_symbol
 from pycex.symbols import linear as make_linear_symbol
 from pycex.symbols import spot as make_spot_symbol
@@ -153,11 +154,13 @@ class OKX(BaseExchange):
         self._acct_level: str | None = None
         self.sandbox = self._resolve_sandbox(sandbox, None, demo)
         self._markets: dict[str, Market] = {}
+        self._rate_limiter = ExchangeRateLimiter(self.name, market_type)
         broker_headers: dict[str, str] = {}
         if OKX_BROKER_ID:
             broker_headers["broker-id"] = OKX_BROKER_ID
         self._http = HTTPClient(
-            OKX_BASE, timeout=timeout, rate=10.0, default_headers=broker_headers, error_mapper=_error_mapper
+            # ExchangeRateLimiter is the sole admission gate; keep HTTPClient from delaying after signing.
+            OKX_BASE, timeout=timeout, rate=float("inf"), default_headers=broker_headers, error_mapper=_error_mapper
         )
 
     @property
@@ -210,7 +213,8 @@ class OKX(BaseExchange):
 
     async def fetch_ticker(self, symbol: str) -> Ticker:
         native = self.to_native(symbol)
-        data = await self._http.get("/api/v5/market/ticker", params={"instId": native})
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get("/api/v5/market/ticker", params={"instId": native})
         result = self._check(data)
         if not result:
             raise ExchangeError(f"okx returned no ticker for {symbol}", code=native, exchange="okx")
@@ -218,7 +222,8 @@ class OKX(BaseExchange):
 
     async def fetch_order_book(self, symbol: str, *, limit: int = 20) -> OrderBook:
         native = self.to_native(symbol)
-        data = await self._http.get("/api/v5/market/books", params={"instId": native, "sz": limit})
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get("/api/v5/market/books", params={"instId": native, "sz": limit})
         result = self._check(data)
         if not result:
             raise ExchangeError(f"okx returned no order book for {symbol}", code=native, exchange="okx")
@@ -245,14 +250,16 @@ class OKX(BaseExchange):
             params["before"] = str(since - 1)
         elif until is not None:
             params["after"] = str(until + 1)
-        data = await self._http.get("/api/v5/market/candles", params=params)
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get("/api/v5/market/candles", params=params)
         result = self._check(data)
         if not result:
             # The regular endpoint only serves a recent rolling window; older
             # ranges come back as an empty `data` array rather than an error.
             # Retry the identical query against history-candles, which covers
             # OKX's full candle history.
-            data = await self._http.get("/api/v5/market/history-candles", params=params)
+            async with self._rate_limiter.request("query"):
+                data = await self._http.get("/api/v5/market/history-candles", params=params)
             result = self._check(data)
         candles = [_parse_candle(k) for k in result]
         candles.sort(key=lambda c: c.timestamp)
@@ -260,12 +267,14 @@ class OKX(BaseExchange):
 
     async def fetch_trades(self, symbol: str, *, limit: int = 100) -> list[Trade]:
         native = self.to_native(symbol)
-        data = await self._http.get("/api/v5/market/trades", params={"instId": native, "limit": str(limit)})
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get("/api/v5/market/trades", params={"instId": native, "limit": str(limit)})
         result = self._check(data)
         return [_parse_trade(symbol, t) for t in result]
 
     async def fetch_markets(self) -> list[Market]:
-        data = await self._http.get("/api/v5/public/instruments", params={"instType": self._inst_type})
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get("/api/v5/public/instruments", params={"instType": self._inst_type})
         result = self._check(data)
         markets = [_parse_market(d, self.market_type) for d in result]
         self._markets = {m.native: m for m in markets}
@@ -275,7 +284,8 @@ class OKX(BaseExchange):
 
     async def fetch_balance(self) -> Balance:
         path = "/api/v5/account/balance"
-        data = await self._http.get(path, headers=self._auth_headers("GET", path))
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get(path, headers=self._auth_headers("GET", path))
         result = self._check(data)
         return _parse_balance(result, data)
 
@@ -287,7 +297,8 @@ class OKX(BaseExchange):
         read-only connectivity probe.
         """
         path = "/api/v5/account/config"
-        data = await self._http.get(path, headers=self._auth_headers("GET", path))
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get(path, headers=self._auth_headers("GET", path))
         result = self._check(data)
         row: dict[str, Any] = result[0] if result else {}
         level = str(row.get("acctLv") or "")
@@ -330,7 +341,8 @@ class OKX(BaseExchange):
         path = "/api/v5/account/balance"
         params = {"ccy": asset.upper()}
         full_path = f"{path}?{urlencode(params)}"
-        data = await self._http.get(path, params=params, headers=self._auth_headers("GET", full_path))
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get(path, params=params, headers=self._auth_headers("GET", full_path))
         result = self._check(data)
         for account in result:
             for detail in account.get("details", []):
@@ -344,7 +356,8 @@ class OKX(BaseExchange):
         path = "/api/v5/account/positions"
         query = {"instType": "SWAP"}
         full_path = f"{path}?{urlencode(query)}"
-        data = await self._http.get(path, params=query, headers=self._auth_headers("GET", full_path))
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get(path, params=query, headers=self._auth_headers("GET", full_path))
         result = self._check(data)
         positions = [
             _parse_position(self.from_native(str(p.get("instId", ""))), p)
@@ -360,7 +373,8 @@ class OKX(BaseExchange):
         if self.market_type != "linear":
             return await super().fetch_funding_rate(symbol)
         native = self.to_native(symbol)
-        data = await self._http.get("/api/v5/public/funding-rate", params={"instId": native})
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get("/api/v5/public/funding-rate", params={"instId": native})
         result = self._check(data)
         return _parse_funding(symbol, result[0] if result else {})
 
@@ -384,7 +398,8 @@ class OKX(BaseExchange):
         path = "/api/v5/account/set-leverage"
         body = {"instId": self.to_native(symbol), "lever": _num(lever), "mgnMode": mgn_mode}
         body_str = json.dumps(body)
-        data = await self._http.post_raw(path, body=body_str, headers=self._auth_headers("POST", path, body_str))
+        async with self._rate_limiter.request("query"):
+            data = await self._http.post_raw(path, body=body_str, headers=self._auth_headers("POST", path, body_str))
         result = self._check(data)
         row: dict[str, Any] = result[0] if result else {}
         return row
@@ -477,7 +492,8 @@ class OKX(BaseExchange):
         # one-way mode (OKX's default). A hedge-mode account requires
         # posSide="long"/"short" on every order — see module docstring.
         body_str = json.dumps(body)
-        data = await self._http.post_raw(path, body=body_str, headers=self._auth_headers("POST", path, body_str))
+        async with self._rate_limiter.request("order"):
+            data = await self._http.post_raw(path, body=body_str, headers=self._auth_headers("POST", path, body_str))
         r = _check_order_response(data)
         return Order(
             id=r.get("ordId", ""),
@@ -495,7 +511,8 @@ class OKX(BaseExchange):
         native = self.to_native(symbol)
         body = {"instId": native, "ordId": order_id}
         body_str = json.dumps(body)
-        data = await self._http.post_raw(path, body=body_str, headers=self._auth_headers("POST", path, body_str))
+        async with self._rate_limiter.request("order"):
+            data = await self._http.post_raw(path, body=body_str, headers=self._auth_headers("POST", path, body_str))
         r = _check_order_response(data)
         return Order(
             id=r.get("ordId", order_id),
@@ -510,11 +527,12 @@ class OKX(BaseExchange):
     async def fetch_order(self, order_id: str, symbol: str) -> Order:
         native = self.to_native(symbol)
         path = f"/api/v5/trade/order?instId={native}&ordId={order_id}"
-        data = await self._http.get(
-            "/api/v5/trade/order",
-            params={"instId": native, "ordId": order_id},
-            headers=self._auth_headers("GET", path),
-        )
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get(
+                "/api/v5/trade/order",
+                params={"instId": native, "ordId": order_id},
+                headers=self._auth_headers("GET", path),
+            )
         result = self._check(data)
         if result:
             return _parse_order(symbol, result[0])
@@ -527,9 +545,10 @@ class OKX(BaseExchange):
         if native:
             params["instId"] = native
             path += f"?instId={native}"
-        data = await self._http.get(
-            "/api/v5/trade/orders-pending", params=params or None, headers=self._auth_headers("GET", path)
-        )
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get(
+                "/api/v5/trade/orders-pending", params=params or None, headers=self._auth_headers("GET", path)
+            )
         result = self._check(data)
         return [_parse_order(self.from_native(o.get("instId", "")), o) for o in result]
 
@@ -549,7 +568,8 @@ class OKX(BaseExchange):
         if limit is not None:
             params["limit"] = str(limit)
         full_path = f"{path}?{urlencode(params)}"
-        data = await self._http.get(path, params=params, headers=self._auth_headers("GET", full_path))
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get(path, params=params, headers=self._auth_headers("GET", full_path))
         result = self._check(data)
         trades = [
             _parse_my_trade(symbol if symbol is not None else self.from_native(str(t.get("instId", ""))), t)

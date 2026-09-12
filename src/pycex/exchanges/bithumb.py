@@ -53,6 +53,7 @@ from pycex.models.balance import Balance
 from pycex.models.market import Market
 from pycex.models.mytrade import MyTrade
 from pycex.models.order import Order
+from pycex.ratelimit import ExchangeRateLimiter
 from pycex.symbols import MarketType
 
 # `invalid_jwt` confirmed live 2026-08-30: GET /v1/accounts with a garbage bearer
@@ -100,7 +101,9 @@ class Bithumb(KrwV1Mixin, BaseExchange):
         self.market_type = market_type
         self.sandbox = False
         self._markets: dict[str, Market] = {}
-        self._http = HTTPClient(BITHUMB_BASE, timeout=timeout, rate=100.0, error_mapper=_map_error)
+        self._rate_limiter = ExchangeRateLimiter(self.name, market_type)
+        # ExchangeRateLimiter is the sole admission gate; keep HTTPClient from delaying after signing.
+        self._http = HTTPClient(BITHUMB_BASE, timeout=timeout, rate=float("inf"), error_mapper=_map_error)
 
     def _headers(self, params: dict[str, Any] | None = None) -> dict[str, str]:
         return bithumb_headers(self._api_key, self._secret, params)
@@ -121,7 +124,8 @@ class Bithumb(KrwV1Mixin, BaseExchange):
     # ── Account ──
 
     async def fetch_balance(self) -> Balance:
-        data = self._check(await self._http.get("/v1/accounts", headers=self._headers()))
+        async with self._rate_limiter.request("query"):
+            data = self._check(await self._http.get("/v1/accounts", headers=self._headers()))
         return _parse_balance(data)
 
     # ── Trading ──
@@ -162,7 +166,8 @@ class Bithumb(KrwV1Mixin, BaseExchange):
         else:
             body["order_type"] = "market"
             body["volume"] = str(amount)
-        data = self._check(await self._http.post("/v2/orders", data=body, headers=self._headers(body)))
+        async with self._rate_limiter.request("order"):
+            data = self._check(await self._http.post("/v2/orders", data=body, headers=self._headers(body)))
         parsed = _parse_order(symbol, _normalize_order_fields(data))
         return parsed.model_copy(
             update={
@@ -184,20 +189,23 @@ class Bithumb(KrwV1Mixin, BaseExchange):
         side/type, so there is nothing honest to fill them with. Do not guess.
         """
         params = {"order_id": order_id}
-        data = self._check(await self._http.delete("/v2/order", params=params, headers=self._headers(params)))
+        async with self._rate_limiter.request("order"):
+            data = self._check(await self._http.delete("/v2/order", params=params, headers=self._headers(params)))
         order = _parse_order(symbol, _normalize_order_fields(data))
         return order.model_copy(update={"status": "cancel"})
 
     async def fetch_order(self, order_id: str, symbol: str) -> Order:
         params = {"uuid": order_id}
-        data = self._check(await self._http.get("/v1/order", params=params, headers=self._headers(params)))
+        async with self._rate_limiter.request("query"):
+            data = self._check(await self._http.get("/v1/order", params=params, headers=self._headers(params)))
         return _parse_order(symbol, data)
 
     async def fetch_open_orders(self, symbol: str | None = None) -> list[Order]:
         params: dict[str, Any] = {"state": "wait"}
         if symbol is not None:
             params["market"] = self.to_native(symbol)
-        data = self._check(await self._http.get("/v2/orders/pending", params=params, headers=self._headers(params)))
+        async with self._rate_limiter.request("query"):
+            data = self._check(await self._http.get("/v2/orders/pending", params=params, headers=self._headers(params)))
         orders = data.get("data", [])
         return [_parse_order(self.from_native(o.get("market", "")), _normalize_order_fields(o)) for o in orders]
 
@@ -220,7 +228,8 @@ class Bithumb(KrwV1Mixin, BaseExchange):
         params: dict[str, Any] = {"state": "done", "limit": n}
         if symbol is not None:
             params["market"] = self.to_native(symbol)
-        data = self._check(await self._http.get("/v2/orders/history", params=params, headers=self._headers(params)))
+        async with self._rate_limiter.request("query"):
+            data = self._check(await self._http.get("/v2/orders/history", params=params, headers=self._headers(params)))
         trades: list[MyTrade] = []
         for order in data.get("data", []):
             order_id = str(order.get("order_id", ""))
@@ -228,9 +237,10 @@ class Bithumb(KrwV1Mixin, BaseExchange):
             quote = order_symbol.split("/")[1]
             order_side = "buy" if order.get("side") == "bid" else "sell"
             detail_params = {"uuid": order_id}
-            detail = self._check(
-                await self._http.get("/v1/order", params=detail_params, headers=self._headers(detail_params))
-            )
+            async with self._rate_limiter.request("query"):
+                detail = self._check(
+                    await self._http.get("/v1/order", params=detail_params, headers=self._headers(detail_params))
+                )
             for t in detail.get("trades", []):
                 created_at = t.get("created_at")
                 trades.append(
