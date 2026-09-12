@@ -87,6 +87,7 @@ from pycex.models.orderbook import OrderBook, OrderBookEntry
 from pycex.models.position import Position
 from pycex.models.ticker import Ticker
 from pycex.models.trade import Trade
+from pycex.ratelimit import ExchangeRateLimiter
 from pycex.symbols import MarketType, parse_symbol
 from pycex.symbols import linear as make_linear_symbol
 from pycex.symbols import spot as make_spot_symbol
@@ -151,6 +152,7 @@ class Binance(BaseExchange):
         self.market_type = market_type
         self.sandbox = self._resolve_sandbox(sandbox, testnet, None)
         self._markets: dict[str, Market] = {}
+        self._rate_limiter = ExchangeRateLimiter(self.name, market_type)
         if market_type == "linear":
             base = BINANCE_FAPI_TESTNET if self.sandbox else BINANCE_FAPI
         else:
@@ -158,8 +160,11 @@ class Binance(BaseExchange):
         broker_headers: dict[str, str] = {}
         if BINANCE_BROKER_ID:
             broker_headers["X-MBX-BROKER-ID"] = BINANCE_BROKER_ID
+        # Endpoint weights follow Binance REST docs:
+        # https://raw.githubusercontent.com/binance/binance-spot-api-docs/master/rest-api.md
+        # ExchangeRateLimiter is the sole request gate; keep the legacy HTTP gate inert.
         self._http = HTTPClient(
-            base, timeout=timeout, rate=10.0, default_headers=broker_headers, error_mapper=_error_mapper
+            base, timeout=timeout, rate=float("inf"), default_headers=broker_headers, error_mapper=_error_mapper
         )
 
     def _p(self, name: str) -> str:
@@ -190,12 +195,19 @@ class Binance(BaseExchange):
 
     async def fetch_ticker(self, symbol: str) -> Ticker:
         native = self.to_native(symbol)
-        data = await self._http.get(self._p("ticker"), params={"symbol": native})
+        # https://raw.githubusercontent.com/binance/binance-spot-api-docs/master/rest-api.md
+        async with self._rate_limiter.request("query", weight=2):
+            data = await self._http.get(self._p("ticker"), params={"symbol": native})
         return _parse_ticker(symbol, data)
 
     async def fetch_order_book(self, symbol: str, *, limit: int = 20) -> OrderBook:
         native = self.to_native(symbol)
-        data = await self._http.get(self._p("depth"), params={"symbol": native, "limit": limit})
+        if self.market_type == "linear":
+            weight = 2 if limit <= 100 else 5 if limit <= 500 else 10 if limit <= 1000 else 20
+        else:
+            weight = 5 if limit <= 100 else 25 if limit <= 500 else 50 if limit <= 1000 else 250
+        async with self._rate_limiter.request("query", weight=weight):
+            data = await self._http.get(self._p("depth"), params={"symbol": native, "limit": limit})
         return _parse_order_book(symbol, data)
 
     async def _fetch_candles_page(
@@ -210,16 +222,23 @@ class Binance(BaseExchange):
             params["startTime"] = since
         if until is not None:
             params["endTime"] = until
-        data = await self._http.get(self._p("klines"), params=params)
+        if self.market_type == "linear":
+            weight = 1 if limit < 100 else 2 if limit < 500 else 5 if limit <= 1000 else 10
+        else:
+            weight = 2
+        async with self._rate_limiter.request("query", weight=weight):
+            data = await self._http.get(self._p("klines"), params=params)
         return [_parse_candle(k) for k in data]
 
     async def fetch_trades(self, symbol: str, *, limit: int = 100) -> list[Trade]:
         native = self.to_native(symbol)
-        data = await self._http.get(self._p("trades"), params={"symbol": native, "limit": limit})
+        async with self._rate_limiter.request("query", weight=5 if self.market_type == "linear" else 25):
+            data = await self._http.get(self._p("trades"), params={"symbol": native, "limit": limit})
         return [_parse_trade(symbol, t) for t in data]
 
     async def fetch_markets(self) -> list[Market]:
-        data = await self._http.get(self._p("exchangeInfo"))
+        async with self._rate_limiter.request("query", weight=1 if self.market_type == "linear" else 20):
+            data = await self._http.get(self._p("exchangeInfo"))
         markets = [_parse_market(s, self.market_type) for s in data.get("symbols", [])]
         self._markets = {m.native: m for m in markets}
         return markets
@@ -227,8 +246,9 @@ class Binance(BaseExchange):
     # ── Account ──
 
     async def fetch_balance(self) -> Balance:
-        params = self._signed_params()
-        data = await self._http.get(self._p("balance"), params=params, headers=self._auth_headers())
+        async with self._rate_limiter.request("query", weight=5 if self.market_type == "linear" else 20):
+            params = self._signed_params()
+            data = await self._http.get(self._p("balance"), params=params, headers=self._auth_headers())
         if self.market_type == "linear":
             return _parse_balance_linear(data)
         return _parse_balance(data)
@@ -236,8 +256,9 @@ class Binance(BaseExchange):
     async def fetch_positions(self, symbols: list[str] | None = None) -> list[Position]:
         if self.market_type != "linear":
             return await super().fetch_positions(symbols)
-        params = self._signed_params()
-        data = await self._http.get(self._p("positionRisk"), params=params, headers=self._auth_headers())
+        async with self._rate_limiter.request("query", weight=10):
+            params = self._signed_params()
+            data = await self._http.get(self._p("positionRisk"), params=params, headers=self._auth_headers())
         positions = [
             _parse_position(self.from_native(str(p.get("symbol", ""))), p)
             for p in data
@@ -252,7 +273,8 @@ class Binance(BaseExchange):
         if self.market_type != "linear":
             return await super().fetch_funding_rate(symbol)
         native = self.to_native(symbol)
-        data = await self._http.get(self._p("premiumIndex"), params={"symbol": native})
+        async with self._rate_limiter.request("query", weight=1):
+            data = await self._http.get(self._p("premiumIndex"), params={"symbol": native})
         return _parse_funding(symbol, data)
 
     # ── Trading ──
@@ -270,28 +292,34 @@ class Binance(BaseExchange):
         if price is not None:
             params["price"] = str(price)
             params["timeInForce"] = "GTC"
-        params = self._signed_params(params)
-        data = await self._http.post(self._p("order"), params=params, headers=self._auth_headers())
+        async with self._rate_limiter.request("order", weight=1):
+            params = self._signed_params(params)
+            data = await self._http.post(self._p("order"), params=params, headers=self._auth_headers())
         return _parse_order(symbol, data)
 
     async def cancel_order(self, order_id: str, symbol: str) -> Order:
         native = self.to_native(symbol)
-        params = self._signed_params({"symbol": native, "orderId": order_id})
-        data = await self._http.delete(self._p("order"), params=params, headers=self._auth_headers())
+        async with self._rate_limiter.request("order", weight=1):
+            params = self._signed_params({"symbol": native, "orderId": order_id})
+            data = await self._http.delete(self._p("order"), params=params, headers=self._auth_headers())
         return _parse_order(symbol, data)
 
     async def fetch_order(self, order_id: str, symbol: str) -> Order:
         native = self.to_native(symbol)
-        params = self._signed_params({"symbol": native, "orderId": order_id})
-        data = await self._http.get(self._p("order"), params=params, headers=self._auth_headers())
+        async with self._rate_limiter.request("query", weight=1 if self.market_type == "linear" else 4):
+            params = self._signed_params({"symbol": native, "orderId": order_id})
+            data = await self._http.get(self._p("order"), params=params, headers=self._auth_headers())
         return _parse_order(symbol, data)
 
     async def fetch_open_orders(self, symbol: str | None = None) -> list[Order]:
         p: dict[str, Any] = {}
         if symbol:
             p["symbol"] = self.to_native(symbol)
-        params = self._signed_params(p)
-        data = await self._http.get(self._p("openOrders"), params=params, headers=self._auth_headers())
+        # https://developers.binance.com/docs/derivatives/usds-margined-futures/trade/rest-api/Current-All-Open-Orders
+        weight = (1 if symbol else 40) if self.market_type == "linear" else (6 if symbol else 80)
+        async with self._rate_limiter.request("query", weight=weight):
+            params = self._signed_params(p)
+            data = await self._http.get(self._p("openOrders"), params=params, headers=self._auth_headers())
         return [_parse_order(self.from_native(o.get("symbol", "")), o) for o in data]
 
     async def fetch_my_trades(
@@ -305,8 +333,9 @@ class Binance(BaseExchange):
             p["startTime"] = since
         if limit is not None:
             p["limit"] = limit
-        params = self._signed_params(p)
-        data = await self._http.get(self._p("userTrades"), params=params, headers=self._auth_headers())
+        async with self._rate_limiter.request("query", weight=5 if self.market_type == "linear" else 20):
+            params = self._signed_params(p)
+            data = await self._http.get(self._p("userTrades"), params=params, headers=self._auth_headers())
         return [_parse_my_trade(symbol, t) for t in data]
 
 

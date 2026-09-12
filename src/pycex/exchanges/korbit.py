@@ -44,6 +44,7 @@ from pycex.models.order import Order
 from pycex.models.orderbook import OrderBook, OrderBookEntry
 from pycex.models.ticker import Ticker
 from pycex.models.trade import Trade
+from pycex.ratelimit import ExchangeRateLimiter
 from pycex.symbols import MarketType, parse_symbol
 
 # Canonical timeframe -> Korbit `interval` value. Confirmed verbatim against
@@ -86,7 +87,9 @@ class Korbit(BaseExchange):
         self.market_type = market_type
         self.sandbox = False
         self._markets: dict[str, Market] = {}
-        self._http = HTTPClient(KORBIT_BASE, timeout=timeout, rate=40.0, error_mapper=_map_error)
+        self._rate_limiter = ExchangeRateLimiter(self.name, market_type)
+        # ExchangeRateLimiter is the sole admission gate; keep HTTPClient from delaying after signing.
+        self._http = HTTPClient(KORBIT_BASE, timeout=timeout, rate=float("inf"), error_mapper=_map_error)
 
     # ── Symbols ──
 
@@ -131,7 +134,8 @@ class Korbit(BaseExchange):
 
     async def fetch_ticker(self, symbol: str) -> Ticker:
         native = self.to_native(symbol)
-        data = await self._http.get("/v2/tickers", params={"symbol": native})
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get("/v2/tickers", params={"symbol": native})
         arr = _unwrap(data)
         return _parse_ticker(symbol, arr[0])
 
@@ -141,7 +145,8 @@ class Korbit(BaseExchange):
         # (docs.korbit.co.kr/llms/en/rest_api/quotation.md) — so there is nothing to
         # pass it as without changing its semantics.
         native = self.to_native(symbol)
-        data = await self._http.get("/v2/orderbook", params={"symbol": native})
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get("/v2/orderbook", params={"symbol": native})
         d = _unwrap(data)
         return OrderBook(
             symbol=symbol,
@@ -163,16 +168,19 @@ class Korbit(BaseExchange):
             params["start"] = since
         if until is not None:
             params["end"] = until
-        data = await self._http.get("/v2/candles", params=params)
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get("/v2/candles", params=params)
         return [_parse_candle(c) for c in _unwrap(data)]
 
     async def fetch_trades(self, symbol: str, *, limit: int = 100) -> list[Trade]:
         native = self.to_native(symbol)
-        data = await self._http.get("/v2/trades", params={"symbol": native, "limit": limit})
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get("/v2/trades", params={"symbol": native, "limit": limit})
         return [_parse_public_trade(symbol, t) for t in _unwrap(data)]
 
     async def fetch_markets(self) -> list[Market]:
-        data = await self._http.get("/v2/currencyPairs")
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get("/v2/currencyPairs")
         markets = [_parse_market(m) for m in _unwrap(data)]
         self._markets = {m.native: m for m in markets}
         return markets
@@ -180,8 +188,9 @@ class Korbit(BaseExchange):
     # ── Account ──
 
     async def fetch_balance(self) -> Balance:
-        path = self._signed_query_path("/v2/balance")
-        data = await self._http.get(path, headers=self._headers())
+        async with self._rate_limiter.request("query"):
+            path = self._signed_query_path("/v2/balance")
+            data = await self._http.get(path, headers=self._headers())
         entries = []
         for c in _unwrap(data):
             entries.append(
@@ -218,8 +227,9 @@ class Korbit(BaseExchange):
             params["amt"] = str(amount)
         else:
             params["qty"] = str(amount)
-        body = self._signed_form_body(params)
-        data = await self._http.post_form("/v2/orders", data=body, headers=self._headers())
+        async with self._rate_limiter.request("order"):
+            body = self._signed_form_body(params)
+            data = await self._http.post_form("/v2/orders", data=body, headers=self._headers())
         result = _unwrap(data)
         order_id = str(result.get("orderId", "")) if isinstance(result, dict) else ""
         return Order(
@@ -234,23 +244,26 @@ class Korbit(BaseExchange):
 
     async def cancel_order(self, order_id: str, symbol: str) -> Order:
         native = self.to_native(symbol)
-        path = self._signed_query_path("/v2/orders", {"symbol": native, "orderId": order_id})
-        data = await self._http.delete(path, headers=self._headers())
+        async with self._rate_limiter.request("order"):
+            path = self._signed_query_path("/v2/orders", {"symbol": native, "orderId": order_id})
+            data = await self._http.delete(path, headers=self._headers())
         # `{"success": true}` only — no order fields to parse; side/type stay unguessed.
         return Order(id=str(order_id), symbol=symbol, side="", type="", amount=0.0, raw=_unwrap(data) or {})
 
     async def fetch_order(self, order_id: str, symbol: str) -> Order:
         native = self.to_native(symbol)
-        path = self._signed_query_path("/v2/orders", {"symbol": native, "orderId": order_id})
-        data = await self._http.get(path, headers=self._headers())
+        async with self._rate_limiter.request("query"):
+            path = self._signed_query_path("/v2/orders", {"symbol": native, "orderId": order_id})
+            data = await self._http.get(path, headers=self._headers())
         return _parse_order(symbol, _unwrap(data))
 
     async def fetch_open_orders(self, symbol: str | None = None) -> list[Order]:
         if symbol is None:
             raise NotSupportedError(f"{self.name}.fetch_open_orders requires a symbol")
         native = self.to_native(symbol)
-        path = self._signed_query_path("/v2/openOrders", {"symbol": native})
-        data = await self._http.get(path, headers=self._headers())
+        async with self._rate_limiter.request("query"):
+            path = self._signed_query_path("/v2/openOrders", {"symbol": native})
+            data = await self._http.get(path, headers=self._headers())
         return [_parse_order(symbol, o) for o in _unwrap(data)]
 
     async def fetch_my_trades(
@@ -262,8 +275,9 @@ class Korbit(BaseExchange):
         params: dict[str, Any] = {"symbol": native, "limit": limit or 100}
         if since is not None:
             params["startTime"] = since
-        path = self._signed_query_path("/v2/myTrades", params)
-        data = await self._http.get(path, headers=self._headers())
+        async with self._rate_limiter.request("query"):
+            path = self._signed_query_path("/v2/myTrades", params)
+            data = await self._http.get(path, headers=self._headers())
         trades: list[MyTrade] = []
         for t in _unwrap(data):
             trades.append(

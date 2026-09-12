@@ -42,6 +42,7 @@ from pycex.models.order import Order
 from pycex.models.orderbook import OrderBook, OrderBookEntry
 from pycex.models.ticker import Ticker
 from pycex.models.trade import Trade
+from pycex.ratelimit import ExchangeRateLimiter
 from pycex.symbols import parse_symbol, spot
 
 if TYPE_CHECKING:
@@ -75,6 +76,7 @@ class KrwV1Mixin:
     # here only so mypy strict resolves attribute access inside this mixin.
     if TYPE_CHECKING:
         _http: HTTPClient
+        _rate_limiter: ExchangeRateLimiter
         name: str
         _markets: dict[str, Market]
 
@@ -138,12 +140,14 @@ class KrwV1Mixin:
 
     async def fetch_ticker(self, symbol: str) -> Ticker:
         native = self.to_native(symbol)
-        data = self._check(await self._http.get("/v1/ticker", params={"markets": native}))
+        async with self._rate_limiter.request("query", group="ticker"):
+            data = self._check(await self._http.get("/v1/ticker", params={"markets": native}))
         return _parse_ticker(data[0])
 
     async def fetch_order_book(self, symbol: str, *, limit: int = 20) -> OrderBook:
         native = self.to_native(symbol)
-        data = self._check(await self._http.get("/v1/orderbook", params={"markets": native}))
+        async with self._rate_limiter.request("query", group="orderbook"):
+            data = self._check(await self._http.get("/v1/orderbook", params={"markets": native}))
         return _parse_order_book(symbol, data[0], limit)
 
     async def _fetch_candles_page(
@@ -159,16 +163,19 @@ class KrwV1Mixin:
             # multi-page walk with `until` (candle_paging = "backward"); this
             # branch only fires for a direct single-page call.
             params["to"] = self._format_to(since + limit * TIMEFRAME_MS[timeframe])
-        data = self._check(await self._http.get(f"/v1/candles/{_TF[timeframe]}", params=params))
+        async with self._rate_limiter.request("query", group="candle"):
+            data = self._check(await self._http.get(f"/v1/candles/{_TF[timeframe]}", params=params))
         return sorted((_parse_candle(c) for c in data), key=lambda c: c.timestamp)
 
     async def fetch_trades(self, symbol: str, *, limit: int = 100) -> list[Trade]:
         native = self.to_native(symbol)
-        data = self._check(await self._http.get("/v1/trades/ticks", params={"market": native, "count": limit}))
+        async with self._rate_limiter.request("query", group="trade"):
+            data = self._check(await self._http.get("/v1/trades/ticks", params={"market": native, "count": limit}))
         return [_parse_trade(symbol, t) for t in data]
 
     async def fetch_markets(self) -> list[Market]:
-        data = self._check(await self._http.get("/v1/market/all", params={"is_details": "true"}))
+        async with self._rate_limiter.request("query", group="market"):
+            data = self._check(await self._http.get("/v1/market/all", params={"is_details": "true"}))
         markets = [_parse_market(m) for m in data]
         self._markets = {m.native: m for m in markets}
         return markets

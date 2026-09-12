@@ -126,6 +126,7 @@ from pycex.models.orderbook import OrderBook, OrderBookEntry
 from pycex.models.position import Position
 from pycex.models.ticker import Ticker
 from pycex.models.trade import Trade
+from pycex.ratelimit import ExchangeRateLimiter
 from pycex.symbols import MarketType, parse_symbol
 from pycex.symbols import linear as make_linear_symbol
 from pycex.symbols import spot as make_spot_symbol
@@ -240,12 +241,18 @@ class Bitget(BaseExchange):
         self.market_type = market_type
         self.sandbox = self._resolve_sandbox(sandbox, None, demo)
         self._markets: dict[str, Market] = {}
+        self._rate_limiter = ExchangeRateLimiter(self.name, market_type)
         self._product_type = "SUSDT-FUTURES" if (market_type == "linear" and self.sandbox) else "USDT-FUTURES"
         broker_headers: dict[str, str] = {}
         if BITGET_BROKER_ID:
             broker_headers["X-CHANNEL-API-CODE"] = BITGET_BROKER_ID
         self._http = HTTPClient(
-            BITGET_BASE, timeout=timeout, rate=10.0, default_headers=broker_headers, error_mapper=_error_mapper
+            # ExchangeRateLimiter is the sole admission gate; keep HTTPClient from delaying after signing.
+            BITGET_BASE,
+            timeout=timeout,
+            rate=float("inf"),
+            default_headers=broker_headers,
+            error_mapper=_error_mapper,
         )
 
     def _p(self, name: str) -> str:
@@ -324,7 +331,8 @@ class Bitget(BaseExchange):
         params: dict[str, Any] = {"symbol": native}
         if self.market_type == "linear":
             params = self._mix_params(params)
-        data = await self._http.get(self._p("ticker"), params=params)
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get(self._p("ticker"), params=params)
         return _parse_ticker(symbol, self._check(data)[0])
 
     async def fetch_order_book(self, symbol: str, *, limit: int = 20) -> OrderBook:
@@ -332,7 +340,8 @@ class Bitget(BaseExchange):
         params: dict[str, Any] = {"symbol": native, "limit": limit}
         if self.market_type == "linear":
             params = self._mix_params(params)
-        data = await self._http.get(self._p("orderbook"), params=params)
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get(self._p("orderbook"), params=params)
         return _parse_order_book(symbol, self._check(data)[0])
 
     async def _fetch_candles_page(
@@ -347,14 +356,16 @@ class Bitget(BaseExchange):
                 params["startTime"] = since
             if until is not None:
                 params["endTime"] = until
-            data = await self._http.get(self._p("candles"), params=params)
+            async with self._rate_limiter.request("query"):
+                data = await self._http.get(self._p("candles"), params=params)
             result = self._check(data)
             if not result:
                 # Mirrors OKX's recent-endpoint-empty -> history-endpoint fallback
                 # (see module docstring): not independently confirmed live for
                 # Bitget in this session, but harmless when the recent endpoint
                 # already returns data (this branch is then never taken).
-                data = await self._http.get(self._p("historyCandles"), params=params)
+                async with self._rate_limiter.request("query"):
+                    data = await self._http.get(self._p("historyCandles"), params=params)
                 result = self._check(data)
             candles = [_parse_candle(k) for k in result]
             candles.sort(key=lambda c: c.timestamp)
@@ -368,7 +379,8 @@ class Bitget(BaseExchange):
             params["startTime"] = since
         if until is not None:
             params["endTime"] = until
-        data = await self._http.get(self._p("candles"), params=params)
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get(self._p("candles"), params=params)
         # Sorted for the same reason the mix branch above is: ascending is the
         # library-wide contract, and it must not depend on which market type
         # (or which of Bitget's two candle endpoints) served the page.
@@ -379,12 +391,14 @@ class Bitget(BaseExchange):
         params: dict[str, Any] = {"symbol": native, "limit": limit}
         if self.market_type == "linear":
             params = self._mix_params(params)
-        data = await self._http.get(self._p("trades"), params=params)
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get(self._p("trades"), params=params)
         return [_parse_trade(symbol, t) for t in self._check(data)]
 
     async def fetch_markets(self) -> list[Market]:
         params = self._mix_params() if self.market_type == "linear" else None
-        data = await self._http.get(self._p("markets"), params=params)
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get(self._p("markets"), params=params)
         markets = [_parse_market(d, self.market_type) for d in self._check(data)]
         self._markets = {m.native: m for m in markets}
         return markets
@@ -394,7 +408,8 @@ class Bitget(BaseExchange):
     async def fetch_balance(self) -> Balance:
         params = self._mix_params() if self.market_type == "linear" else None
         path = self._path(self._p("balance"), params)
-        data = await self._http.get(path, headers=self._signed_get(path))
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get(path, headers=self._signed_get(path))
         result = self._check(data)
         if self.market_type == "linear":
             return _parse_balance_linear(result, data)
@@ -405,7 +420,8 @@ class Bitget(BaseExchange):
             return await super().fetch_positions(symbols)
         params = self._mix_params({"marginCoin": "USDT"})
         path = self._path(self._p("positions"), params)
-        data = await self._http.get(path, headers=self._signed_get(path))
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get(path, headers=self._signed_get(path))
         result = self._check(data)
         positions = [
             _parse_position(self.from_native(str(p.get("symbol", ""))), p)
@@ -422,7 +438,8 @@ class Bitget(BaseExchange):
             return await super().fetch_funding_rate(symbol)
         native = self.to_native(symbol)
         params = self._mix_params({"symbol": native})
-        data = await self._http.get(self._p("funding"), params=params)
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get(self._p("funding"), params=params)
         result = self._check(data)
         return _parse_funding(symbol, result[0] if result else {})
 
@@ -460,7 +477,8 @@ class Bitget(BaseExchange):
                 if price is not None:
                     body["price"] = str(price)
         body_str = json.dumps(body)
-        data = await self._http.post_raw(path, body=body_str, headers=self._signed_post(path, body_str))
+        async with self._rate_limiter.request("order"):
+            data = await self._http.post_raw(path, body=body_str, headers=self._signed_post(path, body_str))
         r = self._check(data)
         first = r[0] if r else {}
         return Order(
@@ -482,7 +500,8 @@ class Bitget(BaseExchange):
         else:
             body = {"symbol": native, "orderId": order_id}
         body_str = json.dumps(body)
-        data = await self._http.post_raw(path, body=body_str, headers=self._signed_post(path, body_str))
+        async with self._rate_limiter.request("order"):
+            data = await self._http.post_raw(path, body=body_str, headers=self._signed_post(path, body_str))
         r = self._check(data)
         first = r[0] if r else {}
         return Order(id=first.get("orderId", order_id), symbol=symbol, side="", type="", amount=0, raw=data)
@@ -496,7 +515,8 @@ class Bitget(BaseExchange):
             # Bitget's spot order-info endpoint is keyed by orderId only — no symbol filter to convert.
             params = {"orderId": order_id}
         path = self._path(self._p("orderInfo"), params)
-        data = await self._http.get(path, headers=self._signed_get(path))
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get(path, headers=self._signed_get(path))
         r = self._check(data)
         if not r:
             return Order(id=order_id, symbol=symbol, side="", type="", amount=0)
@@ -507,11 +527,13 @@ class Bitget(BaseExchange):
         if self.market_type == "linear":
             params: dict[str, Any] = self._mix_params({"symbol": native} if native else None)
             path = self._path(self._p("openOrders"), params)
-            data = await self._http.get(path, headers=self._signed_get(path))
+            async with self._rate_limiter.request("query"):
+                data = await self._http.get(path, headers=self._signed_get(path))
             items = self._unwrap(data, "entrustedList")
             return [_parse_order_mix(self.from_native(o.get("symbol", "")), o) for o in items]
         path = self._path(self._p("openOrders"), {"symbol": native} if native else None)
-        data = await self._http.get(path, headers=self._signed_get(path))
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get(path, headers=self._signed_get(path))
         return [_parse_order(self.from_native(o.get("symbol", "")), o) for o in self._check(data)]
 
     async def fetch_my_trades(
@@ -527,7 +549,8 @@ class Bitget(BaseExchange):
             if limit is not None:
                 params["limit"] = str(limit)
             path = self._path(self._p("fills"), params)
-            data = await self._http.get(path, headers=self._signed_get(path))
+            async with self._rate_limiter.request("query"):
+                data = await self._http.get(path, headers=self._signed_get(path))
             fills = self._unwrap(data, "fillList")
             return [_parse_my_trade_mix(symbol, t) for t in fills]
         params = {"symbol": native}
@@ -536,7 +559,8 @@ class Bitget(BaseExchange):
         if limit is not None:
             params["limit"] = str(limit)
         path = self._path(self._p("fills"), params)
-        data = await self._http.get(path, headers=self._signed_get(path))
+        async with self._rate_limiter.request("query"):
+            data = await self._http.get(path, headers=self._signed_get(path))
         result = self._check(data)
         return [_parse_my_trade_spot(symbol, t) for t in result]
 

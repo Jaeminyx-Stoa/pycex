@@ -29,6 +29,7 @@ from pycex.models.balance import Balance
 from pycex.models.market import Market
 from pycex.models.mytrade import MyTrade
 from pycex.models.order import Order
+from pycex.ratelimit import ExchangeRateLimiter
 from pycex.symbols import MarketType
 
 # `invalid_jwt` confirmed live 2026-08-30: GET /v1/accounts with a garbage bearer
@@ -70,7 +71,9 @@ class Upbit(KrwV1Mixin, BaseExchange):
         self.market_type = market_type
         self.sandbox = False
         self._markets: dict[str, Market] = {}
-        self._http = HTTPClient(UPBIT_BASE, timeout=timeout, rate=8.0, error_mapper=_map_error)
+        self._rate_limiter = ExchangeRateLimiter(self.name, market_type)
+        # ExchangeRateLimiter is the sole request gate; keep the legacy HTTP gate inert.
+        self._http = HTTPClient(UPBIT_BASE, timeout=timeout, rate=float("inf"), error_mapper=_map_error)
 
     def _headers(self, params: dict[str, Any] | None = None) -> dict[str, str]:
         return upbit_headers(self._api_key, self._secret, params)
@@ -78,7 +81,8 @@ class Upbit(KrwV1Mixin, BaseExchange):
     # ── Account ──
 
     async def fetch_balance(self) -> Balance:
-        data = self._check(await self._http.get("/v1/accounts", headers=self._headers()))
+        async with self._rate_limiter.request("query", group="query30"):
+            data = self._check(await self._http.get("/v1/accounts", headers=self._headers()))
         return _parse_balance(data)
 
     # ── Trading ──
@@ -115,7 +119,8 @@ class Upbit(KrwV1Mixin, BaseExchange):
         else:
             body["ord_type"] = "market"
             body["volume"] = str(amount)
-        data = self._check(await self._http.post("/v1/orders", data=body, headers=self._headers(body)))
+        async with self._rate_limiter.request("order"):
+            data = self._check(await self._http.post("/v1/orders", data=body, headers=self._headers(body)))
         parsed = _parse_order(symbol, data)
         return parsed.model_copy(
             update={
@@ -128,19 +133,22 @@ class Upbit(KrwV1Mixin, BaseExchange):
 
     async def cancel_order(self, order_id: str, symbol: str) -> Order:
         params = {"uuid": order_id}
-        data = self._check(await self._http.delete("/v1/order", params=params, headers=self._headers(params)))
+        async with self._rate_limiter.request("order"):
+            data = self._check(await self._http.delete("/v1/order", params=params, headers=self._headers(params)))
         return _parse_order(symbol, data)
 
     async def fetch_order(self, order_id: str, symbol: str) -> Order:
         params = {"uuid": order_id}
-        data = self._check(await self._http.get("/v1/order", params=params, headers=self._headers(params)))
+        async with self._rate_limiter.request("query", group="query30"):
+            data = self._check(await self._http.get("/v1/order", params=params, headers=self._headers(params)))
         return _parse_order(symbol, data)
 
     async def fetch_open_orders(self, symbol: str | None = None) -> list[Order]:
         params: dict[str, Any] = {"state": "wait"}
         if symbol is not None:
             params["market"] = self.to_native(symbol)
-        data = self._check(await self._http.get("/v1/orders", params=params, headers=self._headers(params)))
+        async with self._rate_limiter.request("query", group="query30"):
+            data = self._check(await self._http.get("/v1/orders", params=params, headers=self._headers(params)))
         return [_parse_order(self.from_native(o.get("market", "")), o) for o in data]
 
     async def fetch_my_trades(
@@ -153,7 +161,8 @@ class Upbit(KrwV1Mixin, BaseExchange):
         params: dict[str, Any] = {"state": "done", "limit": limit or 100}
         if symbol is not None:
             params["market"] = self.to_native(symbol)
-        data = self._check(await self._http.get("/v1/orders", params=params, headers=self._headers(params)))
+        async with self._rate_limiter.request("query", group="query30"):
+            data = self._check(await self._http.get("/v1/orders", params=params, headers=self._headers(params)))
         trades: list[MyTrade] = []
         for order in data:
             order_symbol = self.from_native(order.get("market", ""))

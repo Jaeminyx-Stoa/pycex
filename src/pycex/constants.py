@@ -8,6 +8,32 @@ BINANCE_TESTNET = "https://testnet.binance.vision"
 BINANCE_FAPI = "https://fapi.binance.com"  # USDT-M perpetual futures (market_type="linear")
 BINANCE_FAPI_TESTNET = "https://testnet.binancefuture.com"
 
+# ── Exchange request budgets ──
+#
+# Upbit: https://docs.upbit.com/kr/reference/rate-limits
+# The live document currently lists orders as 12/s.  X8 deliberately keeps the
+# lower 8/s value below as a safety margin while the execution layer rolls out.
+UPBIT_QUERY_RATE_LIMIT = (30, 1.0)
+UPBIT_ORDER_RATE_LIMIT = (8, 1.0)
+UPBIT_PUBLIC_RATE_LIMIT = (10, 1.0)
+
+# Binance spot: https://developers.binance.com/docs/binance-spot-api-docs/websocket-api/rate-limits
+# Binance USD-M market data: https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Exchange-Information
+# Binance USD-M order quota: https://www.binance.com/en/support/announcement/detail/6bc47f8b8a05445cb07b30454fec4084
+# Quotas also read directly on 2026-09-12 (some documentation examples are older):
+# https://api.binance.com/api/v3/exchangeInfo?symbol=BTCUSDT
+# https://fapi.binance.com/fapi/v1/exchangeInfo
+BINANCE_SPOT_WEIGHT_RATE_LIMIT = (6000, 60.0)
+BINANCE_SPOT_ORDER_RATE_LIMIT = (100, 10.0)
+BINANCE_LINEAR_WEIGHT_RATE_LIMIT = (2400, 60.0)
+BINANCE_LINEAR_ORDER_RATE_LIMIT = (300, 10.0)
+
+# Bithumb, Korbit, Bitget, and OKX: 문서 재확인 필요
+# Until each venue's current endpoint-specific rules are rechecked, retain a
+# deliberately small per-class and shared allowance plus one in-flight call.
+CONSERVATIVE_RATE_LIMIT = (5, 1.0)
+CONSERVATIVE_MAX_INFLIGHT = 1
+
 # ── Bybit ──
 BYBIT_BASE = "https://api.bybit.com"
 BYBIT_TESTNET = "https://api-testnet.bybit.com"
