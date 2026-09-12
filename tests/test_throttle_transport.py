@@ -133,9 +133,7 @@ async def test_bitget_1001_mapping_is_preserved() -> None:
 
 
 @pytest.mark.parametrize("market_type,weight,budget", [("spot", 250, 6000), ("linear", 20, 2400)])
-async def test_binance_depth_weight_exhaustion_waits_before_http(
-    market_type: str, weight: int, budget: int
-) -> None:
+async def test_binance_depth_weight_exhaustion_waits_before_http(market_type: str, weight: int, budget: int) -> None:
     ex = Binance(market_type=market_type)
     clock = FakeClock()
     ex._rate_limiter = ExchangeRateLimiter("binance", market_type, clock=clock, sleep=clock.sleep)

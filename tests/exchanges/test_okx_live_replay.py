@@ -47,7 +47,9 @@ def _adapter(labels: list[str], *, market_type: str = "spot", td_mode: str = "cr
         return httpx.Response(200, json=queue.pop(0))
 
     ex = OKX(
-        api_key="test", secret="test", passphrase="test",
+        api_key="test",
+        secret="test",
+        passphrase="test",
         market_type=market_type,  # type: ignore[arg-type]
         td_mode=td_mode,  # type: ignore[arg-type]
     )
@@ -68,9 +70,7 @@ def _body(ex: OKX, index: int = -1) -> dict[str, Any]:
 async def test_spot_market_buy_body_matches_the_live_one_that_worked() -> None:
     recorded = pair("spot_market_buy_ok")["request"]["body"]
     ex = _adapter(["account_config_acctlv3", "spot_market_buy_ok"])
-    order = await ex.create_order(
-        "BTC/USDT", "buy", "market", 10.0, client_order_id=recorded["clOrdId"]
-    )
+    order = await ex.create_order("BTC/USDT", "buy", "market", 10.0, client_order_id=recorded["clOrdId"])
     assert _body(ex) == recorded
     assert order.id == "3908989407217373184"
     assert order.client_order_id == recorded["clOrdId"]
@@ -105,9 +105,7 @@ async def test_swap_reduce_only_close_body_matches_the_live_one() -> None:
     """S10 정리에서 실제로 통했던 크로스마진 청산 주문 그대로."""
     recorded = pair("swap_reduce_only_close_ok")["request"]["body"]
     ex = _adapter(["swap_reduce_only_close_ok"], market_type="linear", td_mode="cross")
-    await ex.create_order(
-        "ETH/USDT:USDT", "buy", "market", 0.01, client_order_id=recorded["clOrdId"], reduce_only=True
-    )
+    await ex.create_order("ETH/USDT:USDT", "buy", "market", 0.01, client_order_id=recorded["clOrdId"], reduce_only=True)
     assert _body(ex) == recorded
     await ex.close()
 
@@ -117,9 +115,14 @@ async def test_swap_tp_sl_body_matches_the_live_one() -> None:
     algo = recorded["attachAlgoOrds"][0]
     ex = _adapter(["swap_limit_with_tp_sl_ok"], market_type="linear", td_mode="isolated")
     await ex.create_order(
-        "ETH/USDT:USDT", "buy", "limit", 0.01, float(recorded["px"]),
+        "ETH/USDT:USDT",
+        "buy",
+        "limit",
+        0.01,
+        float(recorded["px"]),
         client_order_id=recorded["clOrdId"],
-        tp_px=float(algo["tpTriggerPx"]), sl_px=float(algo["slTriggerPx"]),
+        tp_px=float(algo["tpTriggerPx"]),
+        sl_px=float(algo["slTriggerPx"]),
     )
     assert _body(ex) == recorded
     await ex.close()
@@ -170,9 +173,7 @@ async def test_the_51000_td_mode_rejection_is_permanent_and_would_not_recur() ->
 
     ex = _adapter(["account_config_acctlv3", "spot_cash_rejected_51000_tdmode"])
     with pytest.raises(ExchangeError) as e:
-        await ex.create_order(
-            "ETH/USDT", "sell", "market", 0.00105, client_order_id=recorded_request["clOrdId"]
-        )
+        await ex.create_order("ETH/USDT", "sell", "market", 0.00105, client_order_id=recorded_request["clOrdId"])
     assert e.value.code == "51000"
     assert e.value.retryable is False
     assert _body(ex)["tdMode"] == "cross", "acctLv=3 계좌에 cash 를 다시 보내면 안 된다"
@@ -183,8 +184,7 @@ async def test_the_51008_rejection_is_retryable_and_sent_once() -> None:
     recorded = pair("settlement_pending_51008_spot_sell")["request"]["body"]
     ex = _adapter(["account_config_acctlv3", "settlement_pending_51008_spot_sell"])
     with pytest.raises(SettlementPendingError) as e:
-        await ex.create_order("BTC/USDT", "sell", "market", float(recorded["sz"]),
-                              client_order_id=recorded["clOrdId"])
+        await ex.create_order("BTC/USDT", "sell", "market", float(recorded["sz"]), client_order_id=recorded["clOrdId"])
     assert e.value.retryable is True
     orders = [r for r in ex.sent if r.url.path == "/api/v5/trade/order"]  # type: ignore[attr-defined]
     assert len(orders) == 1, "SDK 가 스스로 다시 보내면 안 된다"
@@ -196,8 +196,9 @@ async def test_the_min_size_rejection_is_not_retryable() -> None:
     recorded = pair("min_size_rejected_51000_sz")["request"]["body"]
     ex = _adapter(["account_config_acctlv3", "min_size_rejected_51000_sz"])
     with pytest.raises(ExchangeError) as e:
-        await ex.create_order("BTC/USDT", "buy", "limit", 1e-07, float(recorded["px"]),
-                              client_order_id=recorded["clOrdId"])
+        await ex.create_order(
+            "BTC/USDT", "buy", "limit", 1e-07, float(recorded["px"]), client_order_id=recorded["clOrdId"]
+        )
     assert (e.value.code, e.value.retryable) == ("51000", False)
     await ex.close()
 
@@ -226,5 +227,5 @@ def test_every_recorded_pair_is_covered_by_a_test() -> None:
     import pathlib
 
     source = pathlib.Path(__file__).read_text()
-    uncovered = [label for label in PAIRS if f'"{label}"' not in source.replace('PAIRS[label]', '')]
+    uncovered = [label for label in PAIRS if f'"{label}"' not in source.replace("PAIRS[label]", "")]
     assert uncovered == [], f"검사하지 않는 기록 쌍: {uncovered}"

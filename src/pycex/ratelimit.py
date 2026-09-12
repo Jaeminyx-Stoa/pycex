@@ -257,9 +257,7 @@ class ExchangeRateLimiter:
         return [(self._buckets[name], weight) for name in names]
 
     @asynccontextmanager
-    async def request(
-        self, kind: str = "query", *, weight: float = 1, group: str | None = None
-    ) -> AsyncIterator[None]:
+    async def request(self, kind: str = "query", *, weight: float = 1, group: str | None = None) -> AsyncIterator[None]:
         """Reserve budget before signing/dispatch, and release concurrency on exit."""
         weight = float(weight)
         if not math.isfinite(weight) or weight < 0:
@@ -271,8 +269,10 @@ class ExchangeRateLimiter:
             raise ValueError("query requests must have a positive weight")
         if any(charge > bucket.limit for bucket, charge in selected):
             raise ValueError("weight exceeds bucket capacity")
-        semaphore = self._loop_semaphore() if self._concurrency is not None else (
-            self._loop_order_semaphore() if kind == "order" else None
+        semaphore = (
+            self._loop_semaphore()
+            if self._concurrency is not None
+            else (self._loop_order_semaphore() if kind == "order" else None)
         )
         lock = self._loop_lock()
         semaphore_acquired = False

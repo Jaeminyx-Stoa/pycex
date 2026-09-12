@@ -248,7 +248,11 @@ class Bitget(BaseExchange):
             broker_headers["X-CHANNEL-API-CODE"] = BITGET_BROKER_ID
         self._http = HTTPClient(
             # ExchangeRateLimiter is the sole admission gate; keep HTTPClient from delaying after signing.
-            BITGET_BASE, timeout=timeout, rate=float("inf"), default_headers=broker_headers, error_mapper=_error_mapper
+            BITGET_BASE,
+            timeout=timeout,
+            rate=float("inf"),
+            default_headers=broker_headers,
+            error_mapper=_error_mapper,
         )
 
     def _p(self, name: str) -> str:

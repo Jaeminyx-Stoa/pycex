@@ -160,7 +160,11 @@ class OKX(BaseExchange):
             broker_headers["broker-id"] = OKX_BROKER_ID
         self._http = HTTPClient(
             # ExchangeRateLimiter is the sole admission gate; keep HTTPClient from delaying after signing.
-            OKX_BASE, timeout=timeout, rate=float("inf"), default_headers=broker_headers, error_mapper=_error_mapper
+            OKX_BASE,
+            timeout=timeout,
+            rate=float("inf"),
+            default_headers=broker_headers,
+            error_mapper=_error_mapper,
         )
 
     @property

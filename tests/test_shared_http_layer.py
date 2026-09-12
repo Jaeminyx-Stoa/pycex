@@ -60,9 +60,7 @@ def test_binance_sync_twin_repeats_without_touching_the_network() -> None:
 def test_binance_rate_limit_budget_carries_across_sync_calls() -> None:
     """바이낸스에서도 예산은 인스턴스의 것이다 — 리미터가 갈리지 않는다."""
     ex = Binance()
-    ex._http.set_transport_factory(
-        lambda: httpx.MockTransport(lambda r: httpx.Response(200, json=_BINANCE_TICKER))
-    )
+    ex._http.set_transport_factory(lambda: httpx.MockTransport(lambda r: httpx.Response(200, json=_BINANCE_TICKER)))
     clock = FakeClock()
     limiter = ex._rate_limiter = ExchangeRateLimiter("binance", clock=clock, sleep=clock.sleep)
     ex.fetch_ticker_sync("BTC/USDT")
