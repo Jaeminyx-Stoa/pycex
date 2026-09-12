@@ -36,16 +36,12 @@ def _spot() -> OKX:
 
 def _order_bodies(httpx_mock: HTTPXMock) -> list[dict]:
     return [
-        json_lib.loads(r.content.decode())
-        for r in httpx_mock.get_requests()
-        if r.url.path == "/api/v5/trade/order"
+        json_lib.loads(r.content.decode()) for r in httpx_mock.get_requests() if r.url.path == "/api/v5/trade/order"
     ]
 
 
 @pytest.mark.parametrize(("level", "expected"), [("1", "cash"), ("2", "cash"), ("3", "cross"), ("4", "cross")])
-async def test_spot_td_mode_follows_measured_account_level(
-    httpx_mock: HTTPXMock, level: str, expected: str
-) -> None:
+async def test_spot_td_mode_follows_measured_account_level(httpx_mock: HTTPXMock, level: str, expected: str) -> None:
     httpx_mock.add_response(json=_config(level))
     httpx_mock.add_response(json=_ORDER_ACK)
     ex = _spot()

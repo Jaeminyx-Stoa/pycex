@@ -92,9 +92,7 @@ async def test_attached_tp_and_sl(httpx_mock: HTTPXMock) -> None:
     ex = _swap()
     await ex.create_order("ETH/USDT:USDT", "buy", "limit", 1, 2442.79, tp_px=2491.64, sl_px=2393.93)
     algo = _body(httpx_mock)["attachAlgoOrds"]
-    assert algo == [
-        {"tpTriggerPx": "2491.64", "tpOrdPx": "-1", "slTriggerPx": "2393.93", "slOrdPx": "-1"}
-    ]
+    assert algo == [{"tpTriggerPx": "2491.64", "tpOrdPx": "-1", "slTriggerPx": "2393.93", "slOrdPx": "-1"}]
     await ex.close()
 
 

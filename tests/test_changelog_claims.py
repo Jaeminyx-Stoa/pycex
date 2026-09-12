@@ -49,9 +49,7 @@ def test_bypass_1_no_doc_anywhere_repeats_the_false_claim() -> None:
 def test_bypass_2_documented_injection_path_actually_exists() -> None:
     """우회 ② — 문서에만 있고 코드에 없는 API 를 적어두는 것을 막는다."""
     assert callable(HTTPClient.set_transport_factory)
-    assert not isinstance(
-        inspect.getattr_static(HTTPClient, "_client"), staticmethod
-    )
+    assert not isinstance(inspect.getattr_static(HTTPClient, "_client"), staticmethod)
     prop = inspect.getattr_static(HTTPClient, "_client")
     assert isinstance(prop, property)
     assert prop.fset is None, "문서는 «읽기 전용»이라고 말한다 — 세터가 있으면 거짓이다"

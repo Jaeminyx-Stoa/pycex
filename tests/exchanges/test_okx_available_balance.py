@@ -22,9 +22,7 @@ from pycex.exchanges.okx import OKX
 
 
 def _balance(**avail: str) -> dict:
-    details = [
-        {"ccy": ccy, "availBal": v, "frozenBal": "0", "cashBal": "999", "eq": "999"} for ccy, v in avail.items()
-    ]
+    details = [{"ccy": ccy, "availBal": v, "frozenBal": "0", "cashBal": "999", "eq": "999"} for ccy, v in avail.items()]
     return {"code": "0", "msg": "", "data": [{"details": details}]}
 
 
